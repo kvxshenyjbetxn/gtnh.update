@@ -1,6 +1,7 @@
-# Agent-local state
+# Agent-local state and internal specification
 .unipi/
 .pi/
+/specification.md
 
 # Dependencies and build output
 node_modules/
