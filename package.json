@@ -8,7 +8,8 @@
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri",
-    "test:core": "cargo test -p gtnh-core"
+    "test:core": "cargo test -p gtnh-core",
+    "test": "node --experimental-strip-types --test tests/downloads.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

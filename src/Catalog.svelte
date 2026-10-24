@@ -3,6 +3,8 @@
   import { invoke } from '@tauri-apps/api/core';
   import { messages } from './i18n';
   import type { Release } from './releases';
+  import { downloads, downloadsForArtifacts, watchDownloads, type DownloadStatus } from './downloads';
+  import DownloadItem from './DownloadItem.svelte';
   let { language, mode, includePrereleases, desktop }: {
     language: 'uk' | 'en'; mode: 'client' | 'server'; includePrereleases: boolean; desktop: boolean;
   } = $props();
@@ -11,6 +13,12 @@
   let busy = $state(false);
   let error = $state('');
   let variants = $state<Record<string, number>>({});
+  let statuses = $state<DownloadStatus[]>([]);
+  let downloadReady = $state(false);
+  let starting = $state<Record<string, boolean>>({});
+  let cancelling = $state<Record<string, boolean>>({});
+  let fileErrors = $state<Record<string, string>>({});
+  let byUrl = $derived(new Map(statuses.map(status => [status.url, status])));
   let visible = $derived(releases.filter(r => includePrereleases || r.channel === 'stable'));
 
   async function fetchCatalog() {
@@ -24,7 +32,29 @@
     try { await invoke('open_release_url', { url }); }
     catch (e) { error = String(e); }
   }
-  onMount(() => { void fetchCatalog(); });
+  async function startDownload(url: string) {
+    if (starting[url] || byUrl.get(url)?.state === 'downloading' || !downloadReady) return;
+    starting[url] = true; fileErrors[url] = '';
+    try { await downloads.start(url); }
+    catch (e) { fileErrors[url] = String(e); }
+    finally { starting[url] = false; }
+  }
+  async function cancelDownload(status: DownloadStatus) {
+    if (cancelling[status.id]) return;
+    cancelling[status.id] = true; fileErrors[status.url] = '';
+    try { await downloads.cancel(status.id); }
+    catch (e) { fileErrors[status.url] = String(e); cancelling[status.id] = false; }
+  }
+  onMount(() => {
+    void fetchCatalog();
+    if (!desktop) return;
+    return watchDownloads(downloads, snapshot => {
+      statuses = snapshot;
+      for (const status of snapshot) {
+        if (status.state !== 'downloading') delete cancelling[status.id];
+      }
+    }, e => { error = String(e); }, () => { downloadReady = true; });
+  });
 </script>
 
 <section class="card catalog-card">
@@ -37,15 +67,27 @@
       {@const artifacts = release.artifacts.filter(a => a.mode === mode)}
       {@const key = `${mode}:${release.version}`}
       {@const artifact = artifacts[variants[key] ?? 0] ?? artifacts[0]}
+      {@const jobs = downloadsForArtifacts(statuses, release.artifacts, mode)}
       <article class="release-row">
-        <div class="release-description"><strong>{release.version}</strong><div><span class="tag">{release.channel === 'stable' ? t.stable : t.betaLabel}</span><time>{release.date}</time></div></div>
-        <div class="release-actions">
-          {#if artifact}
-            <select aria-label={`${t.selectJava}: ${release.version}`} value={variants[key] ?? 0} onchange={e => { variants[key] = Number(e.currentTarget.value); }}>{#each artifacts as file, index}<option value={index}>{file.java}</option>{/each}</select>
-            <button class="secondary" disabled={!desktop} onclick={() => open(artifact.url)}>{t.download} ↗</button>
-          {/if}
-          <button class="text-button" disabled={!desktop} onclick={() => open(release.pageUrl)}>{t.releasePage} ↗</button>
+        <div class="release-main">
+          <div class="release-description"><strong>{release.version}</strong><div><span class="tag">{release.channel === 'stable' ? t.stable : t.betaLabel}</span><time>{release.date}</time></div></div>
+          <div class="release-actions">
+            {#if artifact}
+              <select aria-label={`${t.selectJava}: ${release.version}`} value={variants[key] ?? 0} onchange={e => { variants[key] = Number(e.currentTarget.value); }}>{#each artifacts as file, index}<option value={index}>{file.java}</option>{/each}</select>
+              <button class="secondary" disabled={!desktop || !downloadReady || starting[artifact.url] || byUrl.get(artifact.url)?.state === 'downloading'} onclick={() => startDownload(artifact.url)}>{t.download}</button>
+            {/if}
+            <button class="text-button" disabled={!desktop} onclick={() => open(release.pageUrl)}>{t.releasePage} ↗</button>
+          </div>
         </div>
+        {#each jobs as job (job.status.id)}
+          <DownloadItem {language} java={job.artifact.java} status={job.status}
+            starting={!downloadReady || !!starting[job.status.url]} cancelling={!!cancelling[job.status.id]}
+            error={fileErrors[job.status.url] || ''}
+            onRetry={() => startDownload(job.status.url)} onCancel={() => cancelDownload(job.status)} />
+        {/each}
+        {#if artifact && fileErrors[artifact.url] && !jobs.some(job => job.status.url === artifact.url)}
+          <div class="error" role="alert">{fileErrors[artifact.url]}</div>
+        {/if}
       </article>
     {/each}
   </div>

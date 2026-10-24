@@ -19,7 +19,11 @@ const uk = {
   catalog: 'Каталог версій', refresh: 'Оновити список',
   stable: 'Стабільна', betaLabel: 'Beta / RC',
   download: 'Завантажити', releasePage: 'Примітки до релізу',
-  catalogHint: 'Офіційні архіви GTNH. Завантаження відкривається у браузері.',
+  catalogHint: 'Офіційні архіви GTNH. Зберігаються в downloads у папці конфігурації до успішного встановлення.',
+  downloadProgress: 'Прогрес завантаження', cancelDownload: 'Скасувати', cancelling: 'Скасування…',
+  downloadComplete: 'Архів завантажено. Збережено для встановлення.',
+  downloadCancelled: 'Завантаження скасовано. Тимчасовий файл видалено.',
+  downloadFailed: 'Не вдалося завантажити архів. Спробуйте ще раз.',
   empty: 'Немає версій для вибраного каналу.', selectJava: 'Варіант Java',
 };
 const en: Record<keyof typeof uk, string> = {
@@ -38,6 +42,11 @@ const en: Record<keyof typeof uk, string> = {
   loadError: 'Could not read configuration. Saving is blocked to protect your data.', browser: 'File operations require the desktop application.', error: 'Error',
   catalog: 'Version catalog', refresh: 'Refresh', stable: 'Stable', betaLabel: 'Beta / RC',
   download: 'Download', releasePage: 'Release notes',
-  catalogHint: 'Official GTNH archives. Downloads open in your browser.', empty: 'No versions for the selected channel.', selectJava: 'Java variant',
+  catalogHint: 'Official GTNH archives. Stored in downloads inside the configuration folder until installation succeeds.',
+  downloadProgress: 'Download progress', cancelDownload: 'Cancel', cancelling: 'Cancelling…',
+  downloadComplete: 'Archive downloaded. Saved for installation.',
+  downloadCancelled: 'Download cancelled. The temporary file was removed.',
+  downloadFailed: 'Could not download the archive. Please try again.',
+  empty: 'No versions for the selected channel.', selectJava: 'Java variant',
 };
 export const messages = { uk, en };
