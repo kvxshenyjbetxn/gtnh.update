@@ -1,0 +1,56 @@
+# Agent-local state
+.unipi/
+.pi/
+
+# Dependencies and build output
+node_modules/
+/target/
+/src-tauri/target/
+/dist/
+/src-tauri/gen/
+.vite/
+coverage/
+*.tsbuildinfo
+
+# Local configuration and environment secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.local
+/.cargo/config
+/.cargo/config.toml
+/settings.json
+
+# Signing keys, certificates and provisioning profiles
+*.key
+*.pem
+*.p8
+*.p12
+*.pfx
+*.cer
+*.crt
+*.mobileprovision
+*.provisionprofile
+*.keychain
+*.keychain-db
+*.keystore
+*.jks
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Operating system and editor state
+.DS_Store
+.AppleDouble
+._*
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.idea/
+.vscode/
