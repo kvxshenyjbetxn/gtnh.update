@@ -399,6 +399,9 @@ pub fn prepare(
         extract(&pack, &payload, &progress)?;
     }
     let root = pack_root(&payload, client)?;
+    if client {
+        crate::instance_metadata::update_client_metadata(&source, &root, name)?;
+    }
     let game = if client {
         let dot = root.join(".minecraft");
         let plain = root.join("minecraft");

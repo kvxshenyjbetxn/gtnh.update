@@ -151,6 +151,315 @@ fn local_folder_is_staged_and_left_unchanged_after_transfer() {
 }
 
 #[test]
+fn client_metadata_preserves_playtime_and_sets_display_name_without_replacing_new_settings() {
+    for game in [".minecraft", "minecraft"] {
+        for zipped in [false, true] {
+            for select_instance in [false, true] {
+                for modern in [false, true] {
+                    let (dir, _, zip, _) = setup();
+                    let instance = dir.path().join("Old instance");
+                    let source = instance.join(game);
+                    fs::create_dir_all(&source).unwrap();
+                    let old = "[General]\nConfigVersion=1.3\nname=Old\ntotalTimePlayed=12345\nlastTimePlayed=600\nlastLaunchTime=1700000000000\nJavaPath=old-java\n[Other]\ntotalTimePlayed=999\n";
+                    fs::write(instance.join("instance.cfg"), old).unwrap();
+                    fs::write(instance.join("mmc-pack.json"), "old components").unwrap();
+                    let header = if modern {
+                        "[General]\r\nConfigVersion=1.3\r\n"
+                    } else {
+                        ""
+                    };
+                    let other = if modern {
+                        "[Other]\r\nname=Other name\r\n"
+                    } else {
+                        ""
+                    };
+                    let new = format!("{header}InstanceType=OneSix\r\nname=Pack default\r\ntotalTimePlayed=0\r\nJavaPath=new-java\r\nWrapperCommand=keep-me\r\n{other}");
+                    let pack = dir.path().join("local-pack");
+                    fs::create_dir_all(pack.join(game)).unwrap();
+                    fs::write(pack.join("instance.cfg"), &new).unwrap();
+                    fs::write(pack.join("mmc-pack.json"), "new components").unwrap();
+                    archive(
+                        &zip,
+                        &[
+                            ("Pack/instance.cfg", &new),
+                            ("Pack/mmc-pack.json", "new components"),
+                            (&format!("Pack/{game}/options.txt"), "default"),
+                        ],
+                    );
+                    let selected = gtnh_core::selection::source_directory(
+                        if select_instance { &instance } else { &source },
+                        true,
+                    )
+                    .unwrap();
+                    let target = dir.path().join("@GTNH, Нова #1");
+                    prepare(
+                        if zipped { &zip } else { &pack },
+                        Path::new(&selected),
+                        &target,
+                        true,
+                        &[],
+                        |_| {},
+                    )
+                    .unwrap()
+                    .finish(&[], |_| {})
+                    .unwrap();
+                    let output = fs::read_to_string(target.join("instance.cfg")).unwrap();
+                    assert!(output.contains("totalTimePlayed=12345\r\n"), "{output}");
+                    assert!(output.contains("lastTimePlayed=600\r\n"));
+                    assert!(output.contains("lastLaunchTime=1700000000000\r\n"));
+                    let name = if modern {
+                        "name=\"@@GTNH, Нова #1\"\r\n"
+                    } else {
+                        "name=\"@GTNH, Нова \\#1\"\r\n"
+                    };
+                    assert!(output.contains(name), "{output}");
+                    assert!(output.contains("JavaPath=new-java\r\nWrapperCommand=keep-me\r\n"));
+                    if modern {
+                        assert!(output.contains("[Other]\r\nname=Other name\r\n"));
+                    }
+                    assert_eq!(
+                        fs::read_to_string(target.join("mmc-pack.json")).unwrap(),
+                        "new components"
+                    );
+                    assert_eq!(
+                        fs::read_to_string(instance.join("instance.cfg")).unwrap(),
+                        old
+                    );
+                    assert_eq!(fs::read_to_string(pack.join("instance.cfg")).unwrap(), new);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn client_metadata_missing_invalid_and_unrelated_statistics_do_not_replace_pack_values() {
+    for old in [
+        None,
+        Some(
+            "name=Old\ntotalTimePlayed=42\nlastTimePlayed=-1\nlastLaunchTime=9223372036854775808\n",
+        ),
+        Some("[General]\ntotalTimePlayed=oops\n[Other]\ntotalTimePlayed=999\nlastTimePlayed=111\n"),
+        Some("[General]\ntotalTimePlayed=1\ntotalTimePlayed=invalid\n"),
+        Some("[General]\nlastTimePlayed=\"17\"\n"),
+    ] {
+        let (dir, _, zip, target) = setup();
+        let instance = dir.path().join("Old instance");
+        let source = instance.join(".minecraft");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(instance.join("mmc-pack.json"), "{}").unwrap();
+        if let Some(contents) = old {
+            fs::write(instance.join("instance.cfg"), contents).unwrap();
+        }
+        archive(&zip, &[("instance.cfg", "[General]\nConfigVersion=1.3\nname=Default\ntotalTimePlayed=5\nlastTimePlayed=6\nlastLaunchTime=7\n"), ("mmc-pack.json", "{}")]);
+        prepare(&zip, &source, &target, true, &[], |_| {})
+            .unwrap()
+            .finish(&[], |_| {})
+            .unwrap();
+        let output = fs::read_to_string(target.join("instance.cfg")).unwrap();
+        assert!(output.contains("name=new\n"));
+        let total = if old.is_some_and(|text| text.contains("totalTimePlayed=42")) {
+            42
+        } else {
+            5
+        };
+        let last = if old.is_some_and(|text| text.contains("lastTimePlayed=\"17\"")) {
+            17
+        } else {
+            6
+        };
+        assert!(
+            output.contains(&format!("totalTimePlayed={total}\n")),
+            "{output}"
+        );
+        assert!(
+            output.contains(&format!("lastTimePlayed={last}\n")),
+            "{output}"
+        );
+        assert!(output.contains("lastLaunchTime=7\n"));
+    }
+}
+
+#[test]
+fn client_display_names_are_encoded_for_qt_and_legacy_prism_without_adding_duplicate_keys() {
+    for (modern, name, expected) in [
+        (true, "GTNH Нова", "name=GTNH Нова"),
+        (true, "GTNH; v=2, ready", "name=\"GTNH; v=2, ready\""),
+        (true, "@GTNH #1", "name=@@GTNH #1"),
+        (false, "GTNH #1", "name=GTNH \\#1"),
+        (false, "GTNH; v=2, ready", "name=\"GTNH; v=2, ready\""),
+    ] {
+        let (dir, source, zip, _) = setup();
+        let header = if modern {
+            "[General]\nConfigVersion=1.3\n"
+        } else {
+            ""
+        };
+        let config = format!("{header}InstanceType=OneSix\nname=Default\nname=Duplicate");
+        archive(&zip, &[("instance.cfg", &config), ("mmc-pack.json", "{}")]);
+        let target = dir.path().join(name);
+        prepare(&zip, &source, &target, true, &[], |_| {})
+            .unwrap()
+            .finish(&[], |_| {})
+            .unwrap();
+        let output = fs::read_to_string(target.join("instance.cfg")).unwrap();
+        assert!(!output.contains("Default") && !output.contains("Duplicate"));
+        assert!(
+            output
+                .lines()
+                .filter(|line| line.starts_with("name="))
+                .all(|line| line == expected),
+            "{output}"
+        );
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.starts_with("name="))
+                .count(),
+            2
+        );
+    }
+}
+
+#[test]
+fn unversioned_grouped_destination_is_rejected_instead_of_publishing_a_wrong_prism_name() {
+    let (_dir, source, zip, target) = setup();
+    archive(
+        &zip,
+        &[
+            (
+                "instance.cfg",
+                "[General]\nname=Default\n[Other]\nname=Wrong in legacy Prism\n",
+            ),
+            ("mmc-pack.json", "{}"),
+        ],
+    );
+    let result = prepare(&zip, &source, &target, true, &[], |_| {});
+    assert!(
+        result.is_err(),
+        "legacy Prism ignores groups and would keep the last name"
+    );
+    assert!(result.err().unwrap().contains("unversioned instance.cfg"));
+    assert!(!target.exists());
+}
+
+#[test]
+fn unversioned_grouped_source_does_not_import_ambiguous_statistics() {
+    let (dir, _, zip, target) = setup();
+    let instance = dir.path().join("old-instance");
+    let source = instance.join(".minecraft");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(instance.join("mmc-pack.json"), "{}").unwrap();
+    fs::write(
+        instance.join("instance.cfg"),
+        "totalTimePlayed=42\n[Other]\ntotalTimePlayed=999\n",
+    )
+    .unwrap();
+    archive(
+        &zip,
+        &[
+            (
+                "instance.cfg",
+                "[General]\nConfigVersion=1.3\nname=Default\ntotalTimePlayed=5\n",
+            ),
+            ("mmc-pack.json", "{}"),
+        ],
+    );
+    prepare(&zip, &source, &target, true, &[], |_| {})
+        .unwrap()
+        .finish(&[], |_| {})
+        .unwrap();
+    let output = fs::read_to_string(target.join("instance.cfg")).unwrap();
+    assert!(
+        output.contains("totalTimePlayed=5\n"),
+        "ambiguous source must not import either value: {output}"
+    );
+}
+
+#[test]
+fn qt_general_section_aliases_preserve_playtime_name_and_unrelated_groups() {
+    for section in ["[general]", "[ General ]"] {
+        let (dir, _, zip, target) = setup();
+        let instance = dir.path().join("old-instance");
+        let source = instance.join(".minecraft");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(instance.join("mmc-pack.json"), "{}").unwrap();
+        fs::write(instance.join("instance.cfg"), format!("{section}\nConfigVersion=1.3\ntotalTimePlayed=42\n[%General]\ntotalTimePlayed=999\n")).unwrap();
+        let config = format!(
+            "{section}\nConfigVersion=1.3\nname=Default\n[%General]\nname=Real group untouched\n"
+        );
+        archive(&zip, &[("instance.cfg", &config), ("mmc-pack.json", "{}")]);
+        prepare(&zip, &source, &target, true, &[], |_| {})
+            .unwrap()
+            .finish(&[], |_| {})
+            .unwrap();
+        assert_eq!(fs::read_to_string(target.join("instance.cfg")).unwrap(), format!("{section}\nConfigVersion=1.3\nname=new\ntotalTimePlayed=42\n[%General]\nname=Real group untouched\n"));
+    }
+}
+
+#[test]
+fn server_instance_cfg_is_not_modified() {
+    let (_dir, source, zip, target) = setup();
+    let config = "name=Server\ntotalTimePlayed=0\n";
+    archive(
+        &zip,
+        &[
+            ("mods/a.jar", "jar"),
+            ("config/a.cfg", "default"),
+            ("instance.cfg", config),
+        ],
+    );
+    prepare(&zip, &source, &target, false, &[], |_| {})
+        .unwrap()
+        .finish(&[], |_| {})
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(target.join("instance.cfg")).unwrap(),
+        config
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn client_metadata_does_not_follow_old_metadata_symlinks_or_unrecognized_parent() {
+    for linked in [false, true] {
+        let (dir, _, zip, target) = setup();
+        let instance = dir.path().join("Old instance");
+        let source = instance.join(".minecraft");
+        fs::create_dir_all(&source).unwrap();
+        let secret = dir.path().join("secret.cfg");
+        fs::write(&secret, "totalTimePlayed=123456\n").unwrap();
+        if linked {
+            fs::write(instance.join("mmc-pack.json"), "{}").unwrap();
+            std::os::unix::fs::symlink(&secret, instance.join("instance.cfg")).unwrap();
+        } else {
+            fs::write(instance.join("instance.cfg"), "totalTimePlayed=123456\n").unwrap();
+        }
+        archive(
+            &zip,
+            &[
+                (
+                    "instance.cfg",
+                    "[General]\nConfigVersion=1.3\nname=Default\n",
+                ),
+                ("mmc-pack.json", "{}"),
+            ],
+        );
+        prepare(&zip, &source, &target, true, &[], |_| {})
+            .unwrap()
+            .finish(&[], |_| {})
+            .unwrap();
+        let output = fs::read_to_string(target.join("instance.cfg")).unwrap();
+        assert!(!output.contains("123456"));
+        assert!(output.contains("name=new\n"));
+        assert_eq!(
+            fs::read_to_string(secret).unwrap(),
+            "totalTimePlayed=123456\n"
+        );
+    }
+}
+
+#[test]
 fn local_pack_cannot_contain_destination_or_be_overwritten() {
     let (dir, source, _zip, _target) = setup();
     let pack = dir.path().join("downloaded-pack");

@@ -17,6 +17,7 @@ test('real app advances accordion, remembers Prism destination and keeps transac
     assert.equal(ui.document.querySelector('#client-step-1-heading button').disabled, true);
     await ready(ui);
     assert.equal(ui.document.activeElement.id, 'client-step-3-heading');
+    assert.match(ui.document.querySelector('.install-name').textContent, /Prism/);
     assert.equal(ui.document.getElementById('client-step-0-content').hidden, true);
     assert.equal(ui.document.getElementById('client-step-3-content').hidden, false);
     assert.doesNotMatch(ui.document.querySelector('.installation-card').textContent, /\/instances/);
@@ -87,6 +88,34 @@ test('failed preparation unlocks editing; retry captures changed rules and never
     assert.equal(ui.document.querySelectorAll('.transfer-list .rule-row').length, 0);
   } finally { await ui.close(); }
 });
+test('changing or clearing Prism preference immediately blocks the obsolete installation destination during slow autosave', async () => {
+  for (const next of [null, '/new-instances']) {
+    const ui = await app();
+    let release;
+    try {
+      await ready(ui);
+      const invoke = ui.fixture.invoke.bind(ui.fixture);
+      ui.fixture.invoke = async (command, args) => {
+        if (command === 'save_settings') await new Promise(resolve => { release = resolve; });
+        return invoke(command, args);
+      };
+      await ui.click('⚙Налаштування');
+      if (next === null) await ui.click('Очистити');
+      else { ui.fixture.dialogs.push(next); await ui.click('Вибрати папку…'); }
+      await ui.click('◈Клієнт');
+      assert.equal(ui.button('Підготувати й перевірити').disabled, true, 'old hidden destination must not remain usable');
+      assert.equal(ui.button('Налаштувати Prism').disabled, false);
+      assert.equal(ui.fixture.commands.filter(item => item.command === 'prepare_installation').length, 0);
+      release(); await ui.settle();
+      if (next === null) assert.equal(ui.button('Підготувати й перевірити').disabled, true);
+      else {
+        await ui.click('Підготувати й перевірити');
+        assert.equal(ui.fixture.commands.find(item => item.command === 'prepare_installation').args.request.parent, next);
+      }
+    } finally { release?.(); await ui.close(); }
+  }
+});
+
 test('moved Prism preference is reported and never silently reused or erased', async () => {
   const ui = await app({ settings: { ...settings(), prismInstancesDirectory: '/moved' } });
   try {
@@ -96,7 +125,7 @@ test('moved Prism preference is reported and never silently reused or erased', a
     assert.equal(ui.button('Підготувати й перевірити').disabled, true);
     await ui.click('Налаштувати Prism');
     ui.fixture.dialogs.push('/override'); await ui.click('Вибрати папку…');
-    await ui.click('Зберегти'); await ui.click('◈Клієнт');
+    await ui.settle(); await ui.click('◈Клієнт');
     await ui.click('Підготувати й перевірити');
     assert.equal(ui.fixture.commands.find(item => item.command === 'prepare_installation').args.request.parent, '/override');
     assert.equal(ui.fixture.settings.prismInstancesDirectory, '/override');

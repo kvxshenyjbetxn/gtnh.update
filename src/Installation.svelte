@@ -94,7 +94,7 @@
         <button class="secondary" disabled={sending} onclick={pickDestination}>{t.selectDestination}</button>
         {#if parent}<code class="directory">{parent}</code>{/if}
       {:else if !parent}<button class="secondary" disabled={sending} onclick={onSettings}>{t.configurePrism}</button>{/if}
-      <label class="install-name">{t.newFolderName}<input bind:value={name} disabled={sending} /></label>
+      <label class="install-name">{request.client ? t.newInstanceName : t.newFolderName}<input bind:value={name} disabled={sending} /></label>
       <button class="primary" disabled={!parent || !name || sending} onclick={prepare}>{t.prepareInstallation}</button>
     {/if}
     {#if working}

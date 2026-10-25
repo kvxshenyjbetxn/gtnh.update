@@ -30,6 +30,10 @@
   let directory = $state('');
   let savedSnapshot = $state('');
   let savedPrism = $state<string | null>(null);
+  let saveError = $state('');
+  let attemptedSnapshot = '';
+  let pendingSnapshot: string | null = null;
+  let writing = false;
   let installRequest = $state<InstallRequest | null>(null);
   let defaultParent = $state<string | null>(null);
   let installBusy = $state(false);
@@ -38,12 +42,21 @@
   let downloadSummary = $state<Record<Mode, string>>({ client: '', server: '' });
   let t = $derived(messages[settings.language]);
   let dirty = $derived(loaded && JSON.stringify(settings) !== savedSnapshot);
-  let locked = $derived(!loaded || installBusy || picking || saving);
+  let locked = $derived(!loaded || installBusy || picking);
   let currentMode = $derived(tab === 'settings' ? lastMode : tab);
 
   $effect(() => {
     document.documentElement.dataset.theme = settings.theme;
     document.documentElement.lang = settings.language;
+  });
+  $effect(() => {
+    if (!loaded) return;
+    const snapshot = JSON.stringify(settings);
+    if (snapshot !== attemptedSnapshot) {
+      attemptedSnapshot = snapshot;
+      pendingSnapshot = snapshot;
+      void savePending();
+    }
   });
   async function focusStep(mode: Mode, step: UpdateStep) {
     await tick();
@@ -64,7 +77,8 @@
     try {
       if (desktop) {
         settings = await invoke<Settings>('load_settings');
-        savedSnapshot = JSON.stringify(settings); savedPrism = settings.prismInstancesDirectory;
+        savedSnapshot = JSON.stringify(settings); attemptedSnapshot = savedSnapshot;
+        savedPrism = settings.prismInstancesDirectory;
         drafts = { client: createDraft(settings.clientSource), server: createDraft(settings.serverSource) };
         loaded = true;
         try { directory = await invoke<string>('config_directory'); } catch (e) { error = String(e); }
@@ -72,19 +86,33 @@
     } catch (e) { error = String(e); }
     finally { loading = false; }
   }
-  async function save() {
-    if (locked) return;
-    saving = true; error = ''; notice = '';
+  async function savePending() {
+    if (writing) return;
+    writing = true; saving = true;
     try {
-      settings = await invoke<Settings>('save_settings', { settings: $state.snapshot(settings) });
-      savedSnapshot = JSON.stringify(settings); savedPrism = settings.prismInstancesDirectory; notice = t.saved;
-      if (installRequest?.client) {
-        defaultParent = null;
-        try { defaultParent = await prismParent(); }
-        catch (e) { error = `${t.prismUnavailable}\n${String(e)}`; }
+      while (pendingSnapshot !== null) {
+        const snapshot = pendingSnapshot;
+        pendingSnapshot = null;
+        const submitted: Settings = JSON.parse(snapshot);
+        saveError = ''; notice = '';
+        try {
+          await invoke<Settings>('save_settings', { settings: submitted });
+          savedSnapshot = snapshot;
+          const prismChanged = savedPrism !== submitted.prismInstancesDirectory;
+          savedPrism = submitted.prismInstancesDirectory;
+          notice = t.saved;
+          if (prismChanged && installRequest?.client && settings.prismInstancesDirectory === savedPrism) {
+            const request = installRequest;
+            const prism = savedPrism;
+            defaultParent = null;
+            try {
+              const parent = await resolvePrismDirectory(prism, path => invoke<string>('instances_directory', { path }));
+              if (request === installRequest && settings.prismInstancesDirectory === prism) defaultParent = parent;
+            } catch (e) { error = `${t.prismUnavailable}\n${String(e)}`; }
+          }
+        } catch (e) { saveError = String(e); }
       }
-    } catch (e) { error = String(e); }
-    finally { saving = false; }
+    } finally { writing = false; saving = false; }
   }
   async function openDirectory() {
     try { await invoke('open_config_directory'); } catch (e) { error = String(e); }
@@ -179,7 +207,7 @@
     installRequest = null;
   }
   function switchTab(next: typeof tab) {
-    if (picking || saving || (installBusy && next !== 'settings' && next !== lastMode)) return;
+    if (picking || (installBusy && next !== 'settings' && next !== lastMode)) return;
     if (next !== 'settings' && next !== lastMode) {
       installRequest = null; defaultParent = null;
       // An already completed draft returns to its transfer step to rebuild its request/destination.
@@ -205,7 +233,7 @@
     <p class="nav-label">{t.workspace}</p>
     <nav aria-label={t.workspace}>
       {#each ['client', 'server', 'settings'] as item}
-        <button disabled={picking || saving || (installBusy && item !== 'settings' && item !== lastMode)} class:active={tab === item} aria-current={tab === item ? 'page' : undefined} onclick={() => switchTab(item as typeof tab)}>
+        <button disabled={picking || (installBusy && item !== 'settings' && item !== lastMode)} class:active={tab === item} aria-current={tab === item ? 'page' : undefined} onclick={() => switchTab(item as typeof tab)}>
           <span class="nav-symbol" aria-hidden="true">{item === 'client' ? '◈' : item === 'server' ? '▤' : '⚙'}</span>{t[item as 'client' | 'server' | 'settings']}
         </button>
       {/each}
@@ -217,6 +245,7 @@
     {#if loading}<p role="status">{t.loading}</p>{/if}
     {#if !desktop}<div class="notice">{t.browser}</div>{/if}
     {#if error}<div class="error" role="alert"><strong>{loaded ? t.error : t.loadError}</strong><pre>{error}</pre>{#if !loaded}<button onclick={load}>{t.retry}</button>{/if}</div>{/if}
+    {#if saveError}<div class="error" role="alert"><strong>{t.error}</strong><pre>{saveError}</pre></div>{/if}
     {#if tab === 'settings' && (installBusy || installStatus?.phase)}
       <div class={installStatus?.phase === 'failed' ? 'error' : 'notice'} role={installStatus?.phase === 'failed' ? 'alert' : 'status'}>
         <strong>{installBusy ? t.installInProgress : installStatus?.phase === 'completed' ? t.installComplete : t.installFailed}</strong>
@@ -261,18 +290,18 @@
     <div hidden={tab === 'settings' || !loaded}>
       <UpdateSection id={`${currentMode}-step-3`} number={4} title={t.reviewInstall} summary={installBusy ? t.installInProgress : t.reviewHint} expanded={expandedStep[currentMode] === 3} locked={locked || drafts[currentMode].completed < 3} lockedReason={drafts[currentMode].completed < 3 ? t.completePrevious : ''} onToggle={() => openStep(currentMode, 3)}>
         <dl class="review-summary"><div><dt>{t.installSource}</dt><dd>{drafts[currentMode].source || '—'}</dd></div><div><dt>{t.newBuild}</dt><dd>{packSummary(currentMode)}</dd></div><div><dt>{t.enabledRules}</dt><dd>{(currentMode === 'client' ? settings.clientRules : settings.serverRules).filter(rule => rule.enabled).length}</dd></div></dl>
-        <Installation language={settings.language} {desktop} bind:request={installRequest} bind:busy={installBusy} {defaultParent} onStatus={status => { installStatus = status; }} onSettings={() => switchTab('settings')} />
+        <Installation language={settings.language} {desktop} bind:request={installRequest} bind:busy={installBusy} defaultParent={settings.prismInstancesDirectory === savedPrism ? defaultParent : null} onStatus={status => { installStatus = status; }} onSettings={() => switchTab('settings')} />
         {#if !installRequest && !installBusy && drafts[currentMode].completed === 3 && installStatus?.phase !== 'completed'}<button class="primary" disabled={locked} onclick={() => { void continueFromReview(); }}>{t.retryPreparation}</button>{/if}
       </UpdateSection>
     </div>
     <div hidden={tab !== 'settings'}>
-      <fieldset disabled={!loaded || saving || picking}>
+      <fieldset disabled={!loaded || picking}>
         <section class="card"><h2>{t.appearance}</h2><div class="settings-grid"><label>{t.language}<select bind:value={settings.language}><option value="uk">Українська</option><option value="en">English</option></select></label><label>{t.theme}<select bind:value={settings.theme}><option value="amoled">{t.amoled}</option><option value="light">{t.light}</option></select></label></div></section>
         <section class="card"><h2>{t.channel}</h2><label class="toggle-label"><input type="checkbox" bind:checked={settings.includePrereleases} /><strong>{t.beta}</strong></label><p class="muted">{t.betaHint}</p></section>
         <section class="card"><h2>{t.prismInstances}</h2><p class="muted">{t.prismInstancesHint}</p><code class="directory">{settings.prismInstancesDirectory || '—'}</code><div class="picker-actions"><button class="secondary" disabled={!desktop || installBusy} onclick={pickPrismDirectory}>{t.selectSource}…</button><button class="secondary" disabled={!settings.prismInstancesDirectory || installBusy} onclick={() => { settings.prismInstancesDirectory = null; }}>{t.clear}</button></div></section>
         <section class="card"><h2>{t.storage}</h2><p class="muted">{t.storageHint}</p><code class="directory">{directory || '—'}</code><button class="secondary" disabled={!desktop} onclick={openDirectory}>{t.open} ↗</button></section>
       </fieldset>
     </div>
-    <footer><span aria-live="polite">{dirty ? t.unsaved : notice || (loaded ? t.clean : '')}</span><button class="primary" disabled={locked || !dirty} onclick={save}>{saving ? t.saving : t.save}</button></footer>
+    <footer><span aria-live="polite">{saving ? t.saving : dirty ? t.unsaved : notice || (loaded ? t.clean : '')}</span></footer>
   </main>
 </div>
