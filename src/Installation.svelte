@@ -1,13 +1,15 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { open } from '@tauri-apps/plugin-dialog';
   import { messages } from './i18n';
   import { packName, unresolvedConflicts, watchInstallation, type InstallRequest, type InstallStatus } from './installation';
   import type { Rule } from './types';
+  import { transactionBusy } from './update-flow';
 
-  let { language, desktop, request = $bindable(null), busy = $bindable(false) }: {
+  let { language, desktop, request = $bindable(null), busy = $bindable(false), defaultParent, onStatus }: {
     language: 'uk' | 'en'; desktop: boolean; request: InstallRequest | null; busy: boolean;
+    defaultParent: string | null; onStatus: (status: InstallStatus | null) => void;
   } = $props();
   let t = $derived(messages[language]);
   let status = $state<InstallStatus | null>(null);
@@ -23,17 +25,19 @@
   let files = $derived(preview?.files.filter(file => !file.directory) ?? []);
   let unanswered = $derived(preview ? unresolvedConflicts(preview, decisions).length : 0);
 
-  $effect(() => { busy = active || sending; });
+  $effect(() => { busy = transactionBusy(status?.phase ?? '', sending); });
+  $effect(() => { onStatus(status); });
   $effect(() => {
-    if (request) {
-      name = packName(request.localPath ?? request.url);
-      parent = ''; error = ''; decisions = {};
-    }
+    const next = request;
+    if (next) untrack(() => {
+      name = packName(next.localPath ?? next.url);
+      parent = defaultParent ?? ''; error = ''; decisions = {};
+    });
   });
   async function pickDestination() {
     try {
-      const selected = await open({ directory: true, multiple: false, title: request?.client ? t.prismDestination : t.serverDestination });
-      if (selected) parent = selected;
+      const selected = await open({ directory: true, multiple: false, title: request?.client ? t.prismDestination : t.serverDestination, defaultPath: parent || undefined });
+      if (selected && !Array.isArray(selected)) parent = selected;
     } catch (e) { error = String(e); }
   }
   async function prepare() {
@@ -110,11 +114,11 @@
       {#if unanswered}<p class="muted">{t.resolveConflicts}: {unanswered}</p>{/if}
       <button class="primary" disabled={sending || unanswered > 0} onclick={finish}>{t.confirmInstallation}</button>
     {/if}
-    {#if status?.phase === 'completed'}
+    {#if !request && status?.phase === 'completed'}
       <p role="status">{t.installComplete}</p><code class="directory">{status.destination}</code>
       <p class="muted">{status.client ? t.prismReady : t.serverReady}</p>
       {#if status.warning}<div class="notice">{status.warning}</div>{/if}
-    {:else if status?.phase === 'failed'}
+    {:else if !request && status?.phase === 'failed'}
       <div class="error" role="alert">{t.installFailed}<pre>{status.error}</pre></div>
     {/if}
   </section>

@@ -5,7 +5,9 @@ use std::path::{Component, Path};
 pub fn instances_directory(path: &Path) -> Result<String, Error> {
     let root = path.canonicalize()?;
     if !root.is_dir() {
-        return Err(Error::Validation("Instances path must be a directory".into()));
+        return Err(Error::Validation(
+            "Instances path must be a directory".into(),
+        ));
     }
     // Opening the listing detects an inaccessible directory before a native dialog uses it.
     std::fs::read_dir(&root)?;
@@ -68,7 +70,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let instances = dir.path().join("Prism instances");
         std::fs::create_dir_all(instances.join("minecraft")).unwrap();
-        assert_eq!(instances_directory(&instances).unwrap(), instances.canonicalize().unwrap().to_string_lossy());
+        assert_eq!(
+            instances_directory(&instances).unwrap(),
+            instances.canonicalize().unwrap().to_string_lossy()
+        );
         assert!(instances_directory(&dir.path().join("missing")).is_err());
         std::fs::write(dir.path().join("file"), "test").unwrap();
         assert!(instances_directory(&dir.path().join("file")).is_err());

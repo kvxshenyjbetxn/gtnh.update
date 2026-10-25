@@ -1,6 +1,7 @@
 # Agent-local state and internal specification
 .unipi/
 .pi/
+/.superpowers/
 /specification.md
 /docs/
 

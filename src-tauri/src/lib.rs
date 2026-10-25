@@ -90,7 +90,6 @@ pub fn run() {
             downloads::start_download,
             downloads::cancel_download,
             downloads::download_status,
-            installation::browse_packs,
             installation::prepare_installation,
             installation::installation_status,
             installation::finish_installation,

@@ -5,9 +5,9 @@
   import type { Artifact, Release } from './releases';
   import { downloads, downloadsForArtifacts, watchDownloads, type DownloadStatus } from './downloads';
   import DownloadItem from './DownloadItem.svelte';
-  let { language, mode, includePrereleases, desktop, canInstall, onInstall }: {
+  let { language, mode, includePrereleases, desktop, canInstall, onInstall, onSummary }: {
     language: 'uk' | 'en'; mode: 'client' | 'server'; includePrereleases: boolean; desktop: boolean;
-    canInstall: boolean; onInstall: (artifact: Artifact) => void;
+    canInstall: boolean; onInstall: (artifact: Artifact) => void; onSummary: (summary: string) => void;
   } = $props();
   let t = $derived(messages[language]);
   let releases = $state<Release[]>([]);
@@ -21,6 +21,17 @@
   let fileErrors = $state<Record<string, string>>({});
   let byUrl = $derived(new Map(statuses.map(status => [status.url, status])));
   let visible = $derived(releases.filter(r => includePrereleases || r.channel === 'stable'));
+  $effect(() => {
+    const urls = new Set(releases.flatMap(release => release.artifacts.filter(a => a.mode === mode).map(a => a.url)));
+    const jobs = statuses.filter(status => urls.has(status.url));
+    const running = jobs.filter(job => job.state === 'downloading');
+    const ready = jobs.filter(job => job.state === 'completed').length;
+    const failed = jobs.filter(job => job.state === 'failed').length;
+    const total = running.reduce((sum, job) => sum + (job.total ?? 0), 0);
+    const received = running.reduce((sum, job) => sum + job.received, 0);
+    const percent = running.length && running.every(job => job.total) ? ` (${Math.min(100, Math.floor(received / total * 100))}%)` : '';
+    onSummary([running.length ? `${t.downloadsActive}: ${running.length}${percent}` : '', ready ? `${t.downloadsReady}: ${ready}` : '', failed ? `${t.downloadsFailed}: ${failed}` : ''].filter(Boolean).join(' · '));
+  });
 
   async function fetchCatalog() {
     if (!desktop || busy) return;

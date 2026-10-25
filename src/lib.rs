@@ -244,8 +244,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let instances = dir.path().join("Prism instances");
         fs::create_dir(&instances).unwrap();
-        let mut settings = Settings::default();
-        settings.prism_instances_directory = Some(instances.to_string_lossy().into_owned());
+        let mut settings = Settings {
+            prism_instances_directory: Some(instances.to_string_lossy().into_owned()),
+            ..Settings::default()
+        };
         save_settings(dir.path(), &settings).unwrap();
         assert_eq!(load_settings(dir.path()).unwrap(), settings);
         // A moved directory must not corrupt or silently erase preferences.
@@ -253,7 +255,10 @@ mod tests {
         assert_eq!(load_settings(dir.path()).unwrap(), settings);
         settings.prism_instances_directory = None;
         save_settings(dir.path(), &settings).unwrap();
-        assert!(load_settings(dir.path()).unwrap().prism_instances_directory.is_none());
+        assert!(load_settings(dir.path())
+            .unwrap()
+            .prism_instances_directory
+            .is_none());
     }
     #[test]
     fn removed_setting_is_read_but_not_written() {

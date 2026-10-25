@@ -79,36 +79,6 @@ impl InstallStore {
         }
     }
 }
-#[derive(Serialize)]
-pub(crate) struct PackBrowser {
-    #[serde(flatten)]
-    listing: gtnh_core::pack_selection::Listing,
-    locations: Vec<String>,
-}
-#[tauri::command]
-pub(crate) async fn browse_packs(
-    app: tauri::AppHandle,
-    path: Option<String>,
-) -> Result<PackBrowser, String> {
-    let home = app.path().home_dir().map_err(|e| e.to_string())?;
-    let directory = path.map(PathBuf::from).unwrap_or_else(|| home.clone());
-    tauri::async_runtime::spawn_blocking(move || {
-        let listing = gtnh_core::pack_selection::browse(&directory)?;
-        let mut locations = vec![home.to_string_lossy().into_owned()];
-        #[cfg(windows)]
-        for drive in b'A'..=b'Z' {
-            let root = format!("{}:\\", drive as char);
-            if std::path::Path::new(&root).is_dir() {
-                locations.push(root);
-            }
-        }
-        #[cfg(unix)]
-        locations.push("/".into());
-        Ok(PackBrowser { listing, locations })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 #[tauri::command]
 pub(crate) fn installation_status(store: State<'_, InstallStore>) -> Result<Status, String> {
     Ok(store.0.lock().map_err(|e| e.to_string())?.status.clone())

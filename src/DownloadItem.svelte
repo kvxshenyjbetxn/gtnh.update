@@ -26,7 +26,7 @@
   {:else if status.state === 'completed'}
     <p role="status">{t.downloadComplete}</p>
     <code class="directory">{status.path}</code>
-    <button class="primary" disabled={!canInstall || starting} onclick={onInstall}>{t.install}</button>
+    <button class="primary" disabled={!canInstall || starting} onclick={onInstall}>{t.selectPack}</button>
     {#if !canInstall}<p class="muted small">{t.installSourceHint}</p>{/if}
   {:else if status.state === 'installed'}
     <p role="status">{t.installComplete}</p><code class="directory">{status.path}</code>
