@@ -10,7 +10,7 @@
   import type { Artifact } from './releases';
   import type { Settings, Rule } from './types';
 
-  let settings = $state<Settings>({ schemaVersion: 1, language: 'uk', theme: 'amoled', includePrereleases: false, clientSource: null, serverSource: null, clientRules: [], serverRules: [] });
+  let settings = $state<Settings>({ schemaVersion: 1, language: 'uk', theme: 'amoled', includePrereleases: false, clientSource: null, serverSource: null, prismInstancesDirectory: null, clientRules: [], serverRules: [] });
   let tab = $state<'client' | 'server' | 'settings'>('client');
   let loaded = $state(false);
   let loading = $state(true);
@@ -58,6 +58,14 @@
   async function openDirectory() {
     try { await invoke('open_config_directory'); }
     catch (e) { error = String(e); }
+  }
+  async function pickPrismDirectory() {
+    picking = true; error = ''; notice = '';
+    try {
+      const path = await open({ directory: true, multiple: false, title: t.prismInstances, defaultPath: settings.prismInstancesDirectory ?? undefined });
+      if (path) settings.prismInstancesDirectory = await invoke<string>('instances_directory', { path });
+    } catch (e) { error = String(e); }
+    finally { picking = false; }
   }
   async function pickSource() {
     picking = true; error = ''; notice = '';
@@ -150,6 +158,7 @@
         </div></section>
         <section class="card"><h2>{t.channel}</h2><label class="toggle-label"><input type="checkbox" bind:checked={settings.includePrereleases} /><strong>{t.beta}</strong></label><p class="muted">{t.betaHint}</p>
         </section>
+        <section class="card"><h2>{t.prismInstances}</h2><p class="muted">{t.prismInstancesHint}</p><code class="directory">{settings.prismInstancesDirectory || '—'}</code><div class="picker-actions"><button class="secondary" disabled={!desktop || installBusy} onclick={pickPrismDirectory}>{t.selectSource}</button><button class="secondary" disabled={!settings.prismInstancesDirectory || installBusy} onclick={() => { settings.prismInstancesDirectory = null; }}>{t.clear}</button></div></section>
         <section class="card"><h2>{t.storage}</h2><p class="muted">{t.storageHint}</p><code class="directory">{directory || '—'}</code><button class="secondary" onclick={openDirectory}>{t.open} ↗</button></section>
       {:else}
         <section class="card"><h2>{t.source}</h2><p class="muted">{tab === 'server' ? t.serverSourceHint : t.sourceHint}</p>{#if source}<code class="directory">{source}</code>{/if}<button class="secondary" onclick={pickSource}>{t.selectSource}</button></section>

@@ -12,6 +12,7 @@ export interface Settings {
   includePrereleases: boolean;
   clientSource: string | null;
   serverSource: string | null;
+  prismInstancesDirectory: string | null;
   clientRules: Rule[];
   serverRules: Rule[];
 }

@@ -1,6 +1,17 @@
 use crate::{validate_rule_path, Error};
 use std::path::{Component, Path};
 
+/// Validate a remembered parent without treating it as an individual game instance.
+pub fn instances_directory(path: &Path) -> Result<String, Error> {
+    let root = path.canonicalize()?;
+    if !root.is_dir() {
+        return Err(Error::Validation("Instances path must be a directory".into()));
+    }
+    // Opening the listing detects an inaccessible directory before a native dialog uses it.
+    std::fs::read_dir(&root)?;
+    Ok(root.to_string_lossy().into_owned())
+}
+
 pub fn source_directory(path: &Path, client: bool) -> Result<String, Error> {
     let mut root = path.canonicalize()?;
     if !root.is_dir() {
@@ -52,6 +63,16 @@ pub fn relative_selections(root: &Path, selected: &[String]) -> Result<Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn instances_directory_requires_readable_directory_and_keeps_instance_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let instances = dir.path().join("Prism instances");
+        std::fs::create_dir_all(instances.join("minecraft")).unwrap();
+        assert_eq!(instances_directory(&instances).unwrap(), instances.canonicalize().unwrap().to_string_lossy());
+        assert!(instances_directory(&dir.path().join("missing")).is_err());
+        std::fs::write(dir.path().join("file"), "test").unwrap();
+        assert!(instances_directory(&dir.path().join("file")).is_err());
+    }
     #[test]
     fn selection_is_relative_and_contained() {
         let dir = tempfile::tempdir().unwrap();

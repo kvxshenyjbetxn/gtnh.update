@@ -42,6 +42,11 @@ fn source_directory(path: String, client: bool) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 #[tauri::command]
+fn instances_directory(path: String) -> Result<String, String> {
+    gtnh_core::selection::instances_directory(std::path::Path::new(&path))
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
 fn relative_selections(root: String, paths: Vec<String>) -> Result<Vec<String>, String> {
     gtnh_core::selection::relative_selections(std::path::Path::new(&root), &paths)
         .map_err(|e| e.to_string())
@@ -79,6 +84,7 @@ pub fn run() {
             config_directory,
             open_config_directory,
             source_directory,
+            instances_directory,
             relative_selections,
             list_releases,
             downloads::start_download,

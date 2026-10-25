@@ -91,6 +91,8 @@ pub struct Settings {
     pub client_source: Option<String>,
     #[serde(default)]
     pub server_source: Option<String>,
+    #[serde(default)]
+    pub prism_instances_directory: Option<String>,
     pub client_rules: Vec<Rule>,
     pub server_rules: Vec<Rule>,
 }
@@ -103,6 +105,7 @@ impl Default for Settings {
             include_prereleases: false,
             client_source: None,
             server_source: None,
+            prism_instances_directory: None,
             client_rules: defaults(CLIENT_PATHS),
             server_rules: defaults(SERVER_PATHS),
         }
@@ -227,13 +230,30 @@ mod tests {
     fn older_settings_gain_optional_fields() {
         let mut json = serde_json::to_value(Settings::default()).unwrap();
         let object = json.as_object_mut().unwrap();
-        for key in ["clientSource", "serverSource"] {
+        for key in ["clientSource", "serverSource", "prismInstancesDirectory"] {
             object.remove(key);
         }
         let settings: Settings = serde_json::from_value(json).unwrap();
         settings.validate().unwrap();
         assert!(settings.client_source.is_none());
         assert!(settings.server_source.is_none());
+        assert!(settings.prism_instances_directory.is_none());
+    }
+    #[test]
+    fn prism_directory_roundtrips_and_can_be_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let instances = dir.path().join("Prism instances");
+        fs::create_dir(&instances).unwrap();
+        let mut settings = Settings::default();
+        settings.prism_instances_directory = Some(instances.to_string_lossy().into_owned());
+        save_settings(dir.path(), &settings).unwrap();
+        assert_eq!(load_settings(dir.path()).unwrap(), settings);
+        // A moved directory must not corrupt or silently erase preferences.
+        fs::remove_dir(&instances).unwrap();
+        assert_eq!(load_settings(dir.path()).unwrap(), settings);
+        settings.prism_instances_directory = None;
+        save_settings(dir.path(), &settings).unwrap();
+        assert!(load_settings(dir.path()).unwrap().prism_instances_directory.is_none());
     }
     #[test]
     fn removed_setting_is_read_but_not_written() {
