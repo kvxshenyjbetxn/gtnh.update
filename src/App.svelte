@@ -18,6 +18,7 @@
   const desktop = isTauri();
   let settings = $state<Settings>({ schemaVersion: 1, language: 'uk', theme: 'amoled', includePrereleases: false, clientSource: null, serverSource: null, prismInstancesDirectory: null, clientRules: [], serverRules: [] });
   let drafts = $state({ client: createDraft(null), server: createDraft(null) });
+  let expandedStep = $state<Record<Mode, UpdateStep | null>>({ client: 0, server: 0 });
   let tab = $state<Mode | 'settings'>('client');
   let lastMode = $state<Mode>('client');
   let loaded = $state(false);
@@ -52,9 +53,11 @@
     drafts[mode] = transitionDraft(drafts[mode], action, locked);
   }
   function openStep(mode: Mode, step: UpdateStep) {
-    if (locked) return;
+    if (locked || step > drafts[mode].completed) return;
+    const collapsing = expandedStep[mode] === step;
     act(mode, { kind: 'open', step });
-    void focusStep(mode, drafts[mode].step);
+    expandedStep[mode] = collapsing ? null : step;
+    void focusStep(mode, step);
   }
   async function load() {
     loading = true; loaded = false; error = ''; notice = '';
@@ -142,7 +145,7 @@
         drafts[mode] = transitionDraft(drafts[mode], { kind: 'source', source: root }, false);
         if (mode === 'client') settings.clientSource = root; else settings.serverSource = root;
       }
-      if (drafts[mode].step === 2) {
+      if (drafts[mode].step === 2 && !installRequest) {
         defaultParent = null;
         if (mode === 'client') {
           try { defaultParent = await prismParent(); }
@@ -150,7 +153,8 @@
         }
       }
       drafts[mode] = transitionDraft(drafts[mode], { kind: 'continue' }, false);
-      if (drafts[mode].step === 3) setRequest(mode);
+      expandedStep[mode] = drafts[mode].step;
+      if (drafts[mode].step === 3 && !installRequest) setRequest(mode);
       await focusStep(mode, drafts[mode].step);
     } catch (e) { error = String(e); }
     finally { picking = false; }
@@ -166,6 +170,7 @@
   function rulesChanged(mode: Mode) {
     if (installBusy) return;
     drafts[mode] = { ...drafts[mode], completed: Math.min(drafts[mode].completed, 2), step: 2 };
+    expandedStep[mode] = 2;
     installRequest = null;
   }
   function switchTab(next: typeof tab) {
@@ -173,7 +178,10 @@
     if (next !== 'settings' && next !== lastMode) {
       installRequest = null; defaultParent = null;
       // An already completed draft returns to its transfer step to rebuild its request/destination.
-      if (drafts[next].completed === 3) drafts[next] = { ...drafts[next], step: 2, completed: 2 };
+      if (drafts[next].completed === 3) {
+        drafts[next] = { ...drafts[next], step: 2, completed: 2 };
+        expandedStep[next] = 2;
+      }
     }
     tab = next; if (next !== 'settings') lastMode = next;
     notice = '';
@@ -204,18 +212,29 @@
     {#if loading}<p role="status">{t.loading}</p>{/if}
     {#if !desktop}<div class="notice">{t.browser}</div>{/if}
     {#if error}<div class="error" role="alert"><strong>{loaded ? t.error : t.loadError}</strong><pre>{error}</pre>{#if !loaded}<button onclick={load}>{t.retry}</button>{/if}</div>{/if}
-    {#if installBusy && tab === 'settings'}<div class="notice" role="status">{t.installInProgress} <button class="secondary" onclick={() => switchTab(lastMode)}>{t.backToUpdate}</button></div>{/if}
+    {#if tab === 'settings' && (installBusy || installStatus?.phase)}
+      <div class={installStatus?.phase === 'failed' ? 'error' : 'notice'} role={installStatus?.phase === 'failed' ? 'alert' : 'status'}>
+        <strong>{installBusy ? t.installInProgress : installStatus?.phase === 'completed' ? t.installComplete : t.installFailed}</strong>
+        {#if installStatus?.progress && installBusy}
+          <p>{t[installStatus.progress.stage]} · {installStatus.progress.done} / {installStatus.progress.total}</p>
+          <progress aria-label={t.installProgress} max={installStatus.progress.total || undefined} value={installStatus.progress.total ? installStatus.progress.done : undefined}></progress>
+        {:else if installStatus?.phase === 'preview'}<p>{t.transferPreview}</p>{/if}
+        {#if installStatus?.phase === 'completed'}<code class="directory">{installStatus.destination}</code>{#if installStatus.warning}<p>{installStatus.warning}</p>{/if}{/if}
+        {#if installStatus?.phase === 'failed'}<pre>{installStatus.error}</pre>{/if}
+        <button class="secondary" onclick={() => switchTab(lastMode)}>{t.backToUpdate}</button>
+      </div>
+    {/if}
 
     {#if loaded}
       {#each modes as mode}
         <div hidden={tab !== mode} class="update-flow">
-          <UpdateSection id={`${mode}-step-0`} number={1} title={t.oldBuild} summary={drafts[mode].source || t.selectFirst} expanded={drafts[mode].step === 0} locked={locked} onToggle={() => openStep(mode, 0)}>
+          <UpdateSection id={`${mode}-step-0`} number={1} title={t.oldBuild} summary={drafts[mode].source || t.selectFirst} expanded={expandedStep[mode] === 0} locked={locked} onToggle={() => openStep(mode, 0)}>
             <p class="muted">{mode === 'client' ? t.sourceHint : t.serverSourceHint}</p>
             {#if drafts[mode].source}<code class="directory">{drafts[mode].source}</code>{/if}
             <button class="secondary" disabled={locked || !desktop} onclick={() => pickSource(mode)}>{t.selectSource}…</button>
             <div class="step-actions"><small>{t.sourceUntouched}</small><button class="primary" disabled={locked || !drafts[mode].source} onclick={() => continueDraft(mode)}>{t.continue} →</button></div>
           </UpdateSection>
-          <UpdateSection id={`${mode}-step-1`} number={2} title={t.newBuild} summary={packSummary(mode)} expanded={drafts[mode].step === 1} locked={locked || drafts[mode].completed < 1} lockedReason={drafts[mode].completed < 1 ? t.completePrevious : ''} onToggle={() => openStep(mode, 1)}>
+          <UpdateSection id={`${mode}-step-1`} number={2} title={t.newBuild} summary={packSummary(mode)} expanded={expandedStep[mode] === 1} locked={locked || drafts[mode].completed < 1} lockedReason={drafts[mode].completed < 1 ? t.completePrevious : ''} onToggle={() => openStep(mode, 1)}>
             <p class="muted">{t.newBuildHint}</p>
             <div class="pack-methods">
               <button class="pack-method" class:selected={packMethod[mode] === 'download'} disabled={locked} aria-pressed={packMethod[mode] === 'download'} onclick={() => { packMethod[mode] = 'download'; }}><strong>↓ {t.download}</strong><span>{t.downloadChoiceHint}</span></button>
@@ -228,7 +247,7 @@
             {#if drafts[mode].pack}<code class="directory">{drafts[mode].pack?.localPath ?? drafts[mode].pack?.url}</code>{/if}
             <div class="step-actions"><small>{t.nativeDialogHint}</small><button class="primary" disabled={locked || !drafts[mode].pack} onclick={() => continueDraft(mode)}>{t.continue} →</button></div>
           </UpdateSection>
-          <UpdateSection id={`${mode}-step-2`} number={3} title={t.whatToTransfer} summary={`${t.enabledRules}: ${(mode === 'client' ? settings.clientRules : settings.serverRules).filter(rule => rule.enabled).length}`} expanded={drafts[mode].step === 2} locked={locked || drafts[mode].completed < 2} lockedReason={drafts[mode].completed < 2 ? t.completePrevious : ''} onToggle={() => openStep(mode, 2)}>
+          <UpdateSection id={`${mode}-step-2`} number={3} title={t.whatToTransfer} summary={`${t.enabledRules}: ${(mode === 'client' ? settings.clientRules : settings.serverRules).filter(rule => rule.enabled).length}`} expanded={expandedStep[mode] === 2} locked={locked || drafts[mode].completed < 2} lockedReason={drafts[mode].completed < 2 ? t.completePrevious : ''} onToggle={() => openStep(mode, 2)}>
             {#if mode === 'client'}<TransferRules bind:rules={settings.clientRules} source={drafts[mode].source || ''} language={settings.language} disabled={locked} client={true} {desktop} onChange={() => rulesChanged(mode)} bind:picking />
             {:else}<TransferRules bind:rules={settings.serverRules} source={drafts[mode].source || ''} language={settings.language} disabled={locked} client={false} {desktop} onChange={() => rulesChanged(mode)} bind:picking />{/if}
             <div class="step-actions"><small>{t.transferHint}</small><button class="primary" disabled={locked || !drafts[mode].pack} onclick={() => continueDraft(mode)}>{t.continue} →</button></div>
@@ -237,7 +256,7 @@
       {/each}
     {/if}
     <div hidden={tab === 'settings' || !loaded}>
-      <UpdateSection id={`${currentMode}-step-3`} number={4} title={t.reviewInstall} summary={installBusy ? t.installInProgress : t.reviewHint} expanded={drafts[currentMode].step === 3} locked={locked || drafts[currentMode].completed < 3} lockedReason={drafts[currentMode].completed < 3 ? t.completePrevious : ''} onToggle={() => openStep(currentMode, 3)}>
+      <UpdateSection id={`${currentMode}-step-3`} number={4} title={t.reviewInstall} summary={installBusy ? t.installInProgress : t.reviewHint} expanded={expandedStep[currentMode] === 3} locked={locked || drafts[currentMode].completed < 3} lockedReason={drafts[currentMode].completed < 3 ? t.completePrevious : ''} onToggle={() => openStep(currentMode, 3)}>
         <dl class="review-summary"><div><dt>{t.installSource}</dt><dd>{drafts[currentMode].source || '—'}</dd></div><div><dt>{t.newBuild}</dt><dd>{packSummary(currentMode)}</dd></div><div><dt>{t.enabledRules}</dt><dd>{(currentMode === 'client' ? settings.clientRules : settings.serverRules).filter(rule => rule.enabled).length}</dd></div></dl>
         <Installation language={settings.language} {desktop} bind:request={installRequest} bind:busy={installBusy} {defaultParent} onStatus={status => { installStatus = status; }} />
         {#if !installRequest && !installBusy && drafts[currentMode].completed === 3 && installStatus?.phase !== 'completed'}<button class="primary" disabled={locked} onclick={() => { void continueFromReview(); }}>{t.retryPreparation}</button>{/if}
