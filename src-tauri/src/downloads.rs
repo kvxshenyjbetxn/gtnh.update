@@ -13,6 +13,7 @@ use tauri::{Emitter, Manager, State};
 enum DownloadState {
     Downloading,
     Completed,
+    Installed,
     Cancelled,
     Failed,
 }
@@ -43,6 +44,33 @@ struct Inner {
 #[derive(Default)]
 pub(crate) struct DownloadStore(Mutex<Inner>);
 impl DownloadStore {
+    pub(crate) fn completed_path(&self, url: &str) -> Result<PathBuf, String> {
+        let inner = self.0.lock().map_err(|e| e.to_string())?;
+        inner
+            .jobs
+            .get(url)
+            .filter(|job| job.status.state == DownloadState::Completed)
+            .and_then(|job| job.status.path.as_ref())
+            .map(PathBuf::from)
+            .ok_or_else(|| "Download this archive before installing it".into())
+    }
+    pub(crate) fn mark_installed(
+        &self,
+        url: &str,
+        destination: &std::path::Path,
+    ) -> Result<Option<DownloadStatus>, String> {
+        let mut inner = self.0.lock().map_err(|e| e.to_string())?;
+        if !inner.jobs.contains_key(url) {
+            return Ok(None);
+        }
+        inner.revision += 1;
+        let revision = inner.revision;
+        let job = inner.jobs.get_mut(url).unwrap();
+        job.status.state = DownloadState::Installed;
+        job.status.path = Some(destination.to_string_lossy().into_owned());
+        job.status.revision = revision;
+        Ok(Some(job.status.clone()))
+    }
     fn status(&self) -> Result<Vec<DownloadStatus>, String> {
         Ok(self
             .0
@@ -169,7 +197,9 @@ pub(crate) fn start_download(
 ) -> Result<(), String> {
     gtnh_core::downloads::validate_url(&url)?;
     let directory = config.directory.join("downloads");
-    let (job, cancel) = store.begin(url.clone())?;
+    let (job, cancel) = app
+        .state::<crate::installation::InstallStore>()
+        .start_download(&url, || store.begin(url.clone()))?;
     let _ = app.emit("download-progress", &job);
     tauri::async_runtime::spawn(async move {
         let last_emit = Mutex::new(Instant::now());

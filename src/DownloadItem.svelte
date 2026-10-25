@@ -2,10 +2,10 @@
   import { messages } from './i18n';
   import type { DownloadStatus } from './downloads';
 
-  let { language, java, status, starting, cancelling, error, onRetry, onCancel }: {
+  let { language, java, status, starting, cancelling, error, onRetry, onCancel, canInstall, onInstall }: {
     language: 'uk' | 'en'; java: string; status: DownloadStatus;
     starting: boolean; cancelling: boolean; error: string;
-    onRetry: () => void; onCancel: () => void;
+    onRetry: () => void; onCancel: () => void; canInstall: boolean; onInstall: () => void;
   } = $props();
   let t = $derived(messages[language]);
   let percent = $derived(status.total ? Math.min(100, Math.floor(status.received / status.total * 100)) : null);
@@ -26,6 +26,10 @@
   {:else if status.state === 'completed'}
     <p role="status">{t.downloadComplete}</p>
     <code class="directory">{status.path}</code>
+    <button class="primary" disabled={!canInstall || starting} onclick={onInstall}>{t.install}</button>
+    {#if !canInstall}<p class="muted small">{t.installSourceHint}</p>{/if}
+  {:else if status.state === 'installed'}
+    <p role="status">{t.installComplete}</p><code class="directory">{status.path}</code>
   {:else if status.state === 'cancelled'}
     <p role="status">{t.downloadCancelled}</p>
     <button class="secondary" disabled={starting} onclick={onRetry}>{t.retry}</button>

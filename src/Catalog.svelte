@@ -2,11 +2,12 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { messages } from './i18n';
-  import type { Release } from './releases';
+  import type { Artifact, Release } from './releases';
   import { downloads, downloadsForArtifacts, watchDownloads, type DownloadStatus } from './downloads';
   import DownloadItem from './DownloadItem.svelte';
-  let { language, mode, includePrereleases, desktop }: {
+  let { language, mode, includePrereleases, desktop, canInstall, onInstall }: {
     language: 'uk' | 'en'; mode: 'client' | 'server'; includePrereleases: boolean; desktop: boolean;
+    canInstall: boolean; onInstall: (artifact: Artifact) => void;
   } = $props();
   let t = $derived(messages[language]);
   let releases = $state<Release[]>([]);
@@ -83,7 +84,8 @@
           <DownloadItem {language} java={job.artifact.java} status={job.status}
             starting={!downloadReady || !!starting[job.status.url]} cancelling={!!cancelling[job.status.id]}
             error={fileErrors[job.status.url] || ''}
-            onRetry={() => startDownload(job.status.url)} onCancel={() => cancelDownload(job.status)} />
+            onRetry={() => startDownload(job.status.url)} onCancel={() => cancelDownload(job.status)}
+            {canInstall} onInstall={() => onInstall(job.artifact)} />
         {/each}
         {#if artifact && fileErrors[artifact.url] && !jobs.some(job => job.status.url === artifact.url)}
           <div class="error" role="alert">{fileErrors[artifact.url]}</div>

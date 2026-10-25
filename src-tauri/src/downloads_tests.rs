@@ -135,6 +135,28 @@ fn stale_callbacks_cannot_overwrite_retries_or_other_archives() {
 }
 
 #[test]
+fn only_completed_downloads_can_be_installed() {
+    let store = DownloadStore::default();
+    assert!(store.completed_path(SERVER).is_err());
+    let (job, _) = store.begin(SERVER.into()).unwrap();
+    assert!(store.completed_path(SERVER).is_err());
+    store
+        .finish(&job.id, Ok(PathBuf::from("archive.zip")))
+        .unwrap();
+    assert_eq!(
+        store.completed_path(SERVER).unwrap(),
+        PathBuf::from("archive.zip")
+    );
+    let installed = store
+        .mark_installed(SERVER, std::path::Path::new("result"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(installed.state, DownloadState::Installed);
+    assert!(store.completed_path(SERVER).is_err());
+    assert!(store.begin(SERVER.into()).is_ok());
+}
+
+#[test]
 fn simultaneous_starts_of_the_same_url_have_one_winner() {
     let store = std::sync::Arc::new(DownloadStore::default());
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));

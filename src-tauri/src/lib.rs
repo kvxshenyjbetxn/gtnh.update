@@ -1,4 +1,5 @@
 mod downloads;
+mod installation;
 use gtnh_core::Settings;
 use std::{path::PathBuf, sync::Mutex};
 use tauri::{Manager, State};
@@ -62,6 +63,7 @@ fn open_release_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .manage(downloads::DownloadStore::default())
+        .manage(installation::InstallStore::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -82,6 +84,11 @@ pub fn run() {
             downloads::start_download,
             downloads::cancel_download,
             downloads::download_status,
+            installation::browse_packs,
+            installation::prepare_installation,
+            installation::installation_status,
+            installation::finish_installation,
+            installation::cancel_installation,
             open_release_url
         ])
         .run(tauri::generate_context!())

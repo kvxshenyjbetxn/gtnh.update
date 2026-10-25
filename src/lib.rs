@@ -1,5 +1,7 @@
 //! Platform-independent settings and migration rules. No GUI dependency.
 pub mod downloads;
+pub mod installation;
+pub mod pack_selection;
 pub mod releases;
 pub mod selection;
 use serde::{Deserialize, Serialize};

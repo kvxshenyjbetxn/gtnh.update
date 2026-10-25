@@ -7,7 +7,8 @@ pub fn source_directory(path: &Path, client: bool) -> Result<String, Error> {
         return Err(Error::Validation("Source must be a directory".into()));
     }
     if client {
-        for name in [".minecraft", "minecraft"] {
+        // Match Prism's gameRoot(): minecraft takes precedence if both exist.
+        for name in ["minecraft", ".minecraft"] {
             if root.join(name).is_dir() {
                 root = root.join(name).canonicalize()?;
                 break;
@@ -70,6 +71,28 @@ mod tests {
         assert_eq!(
             source_directory(&dir.path().join("instance"), true).unwrap(),
             root.canonicalize().unwrap().to_string_lossy()
+        );
+    }
+    #[test]
+    fn prism_source_prefers_minecraft_when_both_directories_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let instance = dir.path().join("instance");
+        std::fs::create_dir_all(instance.join(".minecraft")).unwrap();
+        std::fs::create_dir_all(instance.join("minecraft")).unwrap();
+        std::fs::write(instance.join(".minecraft/options.txt"), "stale").unwrap();
+        std::fs::write(instance.join("minecraft/options.txt"), "active").unwrap();
+        let source = source_directory(&instance, true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&source).join("options.txt")).unwrap(),
+            "active"
+        );
+        assert_eq!(
+            source_directory(&instance.join(".minecraft"), true).unwrap(),
+            instance
+                .join(".minecraft")
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
         );
     }
     #[cfg(unix)]

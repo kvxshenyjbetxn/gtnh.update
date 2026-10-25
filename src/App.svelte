@@ -4,6 +4,10 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { messages } from './i18n';
   import Catalog from './Catalog.svelte';
+  import Installation from './Installation.svelte';
+  import LocalPackPicker from './LocalPackPicker.svelte';
+  import type { InstallRequest } from './installation';
+  import type { Artifact } from './releases';
   import type { Settings, Rule } from './types';
 
   let settings = $state<Settings>({ schemaVersion: 1, language: 'uk', theme: 'amoled', includePrereleases: false, clientSource: null, serverSource: null, clientRules: [], serverRules: [] });
@@ -16,6 +20,10 @@
   let notice = $state('');
   let directory = $state('');
   let savedSnapshot = $state('');
+  let installRequest = $state<InstallRequest | null>(null);
+  let installBusy = $state(false);
+  let packPickerOpen = $state(false);
+  let packPickerMode = $state<'client' | 'server'>('client');
   const desktop = isTauri();
   let t = $derived(messages[settings.language]);
   let rules = $derived(tab === 'server' ? settings.serverRules : settings.clientRules);
@@ -84,16 +92,38 @@
     if (tab === 'server') settings.serverRules = settings.serverRules.filter(r => r !== rule);
     else settings.clientRules = settings.clientRules.filter(r => r !== rule);
   }
+  function selectInstallation(artifact: Artifact) {
+    const selectedSource = artifact.mode === 'client' ? settings.clientSource : settings.serverSource;
+    if (!selectedSource) { error = t.selectFirst; return; }
+    installRequest = {
+      url: artifact.url, client: artifact.mode === 'client', source: selectedSource,
+      rules: $state.snapshot(artifact.mode === 'client' ? settings.clientRules : settings.serverRules),
+    };
+  }
+  function chooseLocalPack() {
+    if (tab === 'settings' || !source || installBusy) return;
+    packPickerMode = tab; packPickerOpen = true;
+  }
+  function selectLocalPack(path: string) {
+    const selectedSource = packPickerMode === 'client' ? settings.clientSource : settings.serverSource;
+    if (!selectedSource) { error = t.selectFirst; return; }
+    installRequest = {
+      localPath: path, client: packPickerMode === 'client', source: selectedSource,
+      rules: $state.snapshot(packPickerMode === 'client' ? settings.clientRules : settings.serverRules),
+    };
+    packPickerOpen = false;
+  }
   onMount(() => { void load(); });
 </script>
 
+{#if packPickerOpen}<LocalPackPicker language={settings.language} onSelect={selectLocalPack} onClose={() => { packPickerOpen = false; }} />{/if}
 <div class="shell">
   <aside>
     <div class="brand"><span class="brand-icon">G</span><strong>GTNH <span>Updater</span></strong></div>
     <p class="nav-label">{t.workspace}</p>
     <nav aria-label={t.workspace}>
       {#each ['client', 'server', 'settings'] as item}
-        <button disabled={picking || saving} class:active={tab === item} aria-current={tab === item ? 'page' : undefined} onclick={() => { tab = item as typeof tab; notice = ''; }}>
+        <button disabled={picking || saving || packPickerOpen} class:active={tab === item} aria-current={tab === item ? 'page' : undefined} onclick={() => { tab = item as typeof tab; notice = ''; }}>
           <span class="nav-symbol" aria-hidden="true">{item === 'client' ? '◈' : item === 'server' ? '▤' : '⚙'}</span>{t[item as 'client' | 'server' | 'settings']}
         </button>
       {/each}
@@ -107,8 +137,11 @@
     {#if error}<div class="error" role="alert"><strong>{loaded ? t.error : t.loadError}</strong><pre>{error}</pre>{#if !loaded}<button onclick={load}>{t.retry}</button>{/if}</div>{/if}
 
     {#if tab !== 'settings' && loaded}
-      <Catalog language={settings.language} mode={tab} includePrereleases={settings.includePrereleases} {desktop} />
+      <section class="card"><div class="card-heading"><h2>{t.alreadyDownloaded}</h2><button class="secondary" disabled={!desktop || !source || installBusy || picking} onclick={chooseLocalPack}>{t.choosePack}</button></div><p class="muted">{t.localPackHint}</p>{#if !source}<p class="muted">{t.selectFirst}</p>{/if}</section>
+      <Catalog language={settings.language} mode={tab} includePrereleases={settings.includePrereleases} {desktop}
+        canInstall={!!source && !installBusy} onInstall={selectInstallation} />
     {/if}
+    <Installation language={settings.language} {desktop} bind:request={installRequest} bind:busy={installBusy} />
     <fieldset disabled={!loaded || saving || picking}>
       {#if tab === 'settings'}
         <section class="card"><h2>{t.appearance}</h2><div class="settings-grid">

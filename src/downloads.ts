@@ -6,7 +6,7 @@ export interface DownloadStatus {
   id: string;
   revision: number;
   url: string;
-  state: 'downloading' | 'completed' | 'cancelled' | 'failed';
+  state: 'downloading' | 'completed' | 'installed' | 'cancelled' | 'failed';
   received: number;
   total: number | null;
   path: string | null;
