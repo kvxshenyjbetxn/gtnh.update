@@ -78,6 +78,11 @@
     try {
       settings = await invoke<Settings>('save_settings', { settings: $state.snapshot(settings) });
       savedSnapshot = JSON.stringify(settings); savedPrism = settings.prismInstancesDirectory; notice = t.saved;
+      if (installRequest?.client) {
+        defaultParent = null;
+        try { defaultParent = await prismParent(); }
+        catch (e) { error = `${t.prismUnavailable}\n${String(e)}`; }
+      }
     } catch (e) { error = String(e); }
     finally { saving = false; }
   }
@@ -208,7 +213,7 @@
     <div class="aside-note">v0.1.0</div>
   </aside>
   <main>
-    <section class="hero"><p class="eyebrow">{tab === 'settings' ? t.settings : `${t.updateBuild} · ${t[tab]}`}</p><h1>{tab === 'settings' ? t.settings : t.updateHeading}</h1><p>{tab === 'settings' ? t.global : t.updateHint}</p></section>
+    <section class="hero"><p class="eyebrow">{tab === 'settings' ? t.settings : `${t.updateBuild} · ${t[tab]}`}</p><h1>{tab === 'settings' ? t.settings : t.updateBuild}</h1></section>
     {#if loading}<p role="status">{t.loading}</p>{/if}
     {#if !desktop}<div class="notice">{t.browser}</div>{/if}
     {#if error}<div class="error" role="alert"><strong>{loaded ? t.error : t.loadError}</strong><pre>{error}</pre>{#if !loaded}<button onclick={load}>{t.retry}</button>{/if}</div>{/if}
@@ -229,13 +234,11 @@
       {#each modes as mode}
         <div hidden={tab !== mode} class="update-flow">
           <UpdateSection id={`${mode}-step-0`} number={1} title={t.oldBuild} summary={drafts[mode].source || t.selectFirst} expanded={expandedStep[mode] === 0} locked={locked} onToggle={() => openStep(mode, 0)}>
-            <p class="muted">{mode === 'client' ? t.sourceHint : t.serverSourceHint}</p>
             {#if drafts[mode].source}<code class="directory">{drafts[mode].source}</code>{/if}
             <button class="secondary" disabled={locked || !desktop} onclick={() => pickSource(mode)}>{t.selectSource}…</button>
-            <div class="step-actions"><small>{t.sourceUntouched}</small><button class="primary" disabled={locked || !drafts[mode].source} onclick={() => continueDraft(mode)}>{t.continue} →</button></div>
+            <div class="step-actions"><button class="primary" disabled={locked || !drafts[mode].source} onclick={() => continueDraft(mode)}>{t.continue} →</button></div>
           </UpdateSection>
           <UpdateSection id={`${mode}-step-1`} number={2} title={t.newBuild} summary={packSummary(mode)} expanded={expandedStep[mode] === 1} locked={locked || drafts[mode].completed < 1} lockedReason={drafts[mode].completed < 1 ? t.completePrevious : ''} onToggle={() => openStep(mode, 1)}>
-            <p class="muted">{t.newBuildHint}</p>
             <div class="pack-methods">
               <button class="pack-method" class:selected={packMethod[mode] === 'download'} disabled={locked} aria-pressed={packMethod[mode] === 'download'} onclick={() => { packMethod[mode] = 'download'; }}><strong>↓ {t.download}</strong><span>{t.downloadChoiceHint}</span></button>
               <button class="pack-method" class:selected={packMethod[mode] === 'local'} disabled={locked} aria-pressed={packMethod[mode] === 'local'} onclick={() => { packMethod[mode] = 'local'; }}><strong>▤ {t.alreadyDownloaded}</strong><span>{t.localChoiceHint}</span></button>
@@ -243,14 +246,14 @@
             <div hidden={packMethod[mode] !== 'download'}>
               <Catalog language={settings.language} {mode} includePrereleases={settings.includePrereleases} {desktop} canInstall={!locked && drafts[mode].completed >= 1} onInstall={selectDownload} onSummary={summary => { downloadSummary[mode] = summary; }} />
             </div>
-            <div hidden={packMethod[mode] !== 'local'} class="local-choice"><div class="picker-actions"><button class="secondary" disabled={locked || !desktop} onclick={() => pickLocal(mode, 'zip')}>{t.chooseZip}…</button><button class="secondary" disabled={locked || !desktop} onclick={() => pickLocal(mode, 'folder')}>{t.chooseFolder}…</button></div><p class="muted">{t.localPackHint}</p></div>
+            <div hidden={packMethod[mode] !== 'local'} class="local-choice"><div class="picker-actions"><button class="secondary" disabled={locked || !desktop} onclick={() => pickLocal(mode, 'zip')}>{t.chooseZip}…</button><button class="secondary" disabled={locked || !desktop} onclick={() => pickLocal(mode, 'folder')}>{t.chooseFolder}…</button></div></div>
             {#if drafts[mode].pack}<code class="directory">{drafts[mode].pack?.localPath ?? drafts[mode].pack?.url}</code>{/if}
-            <div class="step-actions"><small>{t.nativeDialogHint}</small><button class="primary" disabled={locked || !drafts[mode].pack} onclick={() => continueDraft(mode)}>{t.continue} →</button></div>
+            <div class="step-actions"><button class="primary" disabled={locked || !drafts[mode].pack} onclick={() => continueDraft(mode)}>{t.continue} →</button></div>
           </UpdateSection>
           <UpdateSection id={`${mode}-step-2`} number={3} title={t.whatToTransfer} summary={`${t.enabledRules}: ${(mode === 'client' ? settings.clientRules : settings.serverRules).filter(rule => rule.enabled).length}`} expanded={expandedStep[mode] === 2} locked={locked || drafts[mode].completed < 2} lockedReason={drafts[mode].completed < 2 ? t.completePrevious : ''} onToggle={() => openStep(mode, 2)}>
-            {#if mode === 'client'}<TransferRules bind:rules={settings.clientRules} source={drafts[mode].source || ''} language={settings.language} disabled={locked} client={true} {desktop} onChange={() => rulesChanged(mode)} bind:picking />
-            {:else}<TransferRules bind:rules={settings.serverRules} source={drafts[mode].source || ''} language={settings.language} disabled={locked} client={false} {desktop} onChange={() => rulesChanged(mode)} bind:picking />{/if}
-            <div class="step-actions"><small>{t.transferHint}</small><button class="primary" disabled={locked || !drafts[mode].pack} onclick={() => continueDraft(mode)}>{t.continue} →</button></div>
+            {#if mode === 'client'}<TransferRules bind:rules={settings.clientRules} source={drafts[mode].source || ''} language={settings.language} disabled={locked} {desktop} onChange={() => rulesChanged(mode)} bind:picking />
+            {:else}<TransferRules bind:rules={settings.serverRules} source={drafts[mode].source || ''} language={settings.language} disabled={locked} {desktop} onChange={() => rulesChanged(mode)} bind:picking />{/if}
+            <div class="step-actions"><button class="primary" disabled={locked || !drafts[mode].pack} onclick={() => continueDraft(mode)}>{t.continue} →</button></div>
           </UpdateSection>
         </div>
       {/each}
@@ -258,7 +261,7 @@
     <div hidden={tab === 'settings' || !loaded}>
       <UpdateSection id={`${currentMode}-step-3`} number={4} title={t.reviewInstall} summary={installBusy ? t.installInProgress : t.reviewHint} expanded={expandedStep[currentMode] === 3} locked={locked || drafts[currentMode].completed < 3} lockedReason={drafts[currentMode].completed < 3 ? t.completePrevious : ''} onToggle={() => openStep(currentMode, 3)}>
         <dl class="review-summary"><div><dt>{t.installSource}</dt><dd>{drafts[currentMode].source || '—'}</dd></div><div><dt>{t.newBuild}</dt><dd>{packSummary(currentMode)}</dd></div><div><dt>{t.enabledRules}</dt><dd>{(currentMode === 'client' ? settings.clientRules : settings.serverRules).filter(rule => rule.enabled).length}</dd></div></dl>
-        <Installation language={settings.language} {desktop} bind:request={installRequest} bind:busy={installBusy} {defaultParent} onStatus={status => { installStatus = status; }} />
+        <Installation language={settings.language} {desktop} bind:request={installRequest} bind:busy={installBusy} {defaultParent} onStatus={status => { installStatus = status; }} onSettings={() => switchTab('settings')} />
         {#if !installRequest && !installBusy && drafts[currentMode].completed === 3 && installStatus?.phase !== 'completed'}<button class="primary" disabled={locked} onclick={() => { void continueFromReview(); }}>{t.retryPreparation}</button>{/if}
       </UpdateSection>
     </div>

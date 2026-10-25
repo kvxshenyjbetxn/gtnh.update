@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { app, idle } from './helpers/ui-harness.mjs';
 
-async function review(ui) {
-  await ui.click('Продовжити →', ui.document.getElementById('client-step-0-content'));
+async function review(ui, mode = 'client') {
+  await ui.click('Продовжити →', ui.document.getElementById(`${mode}-step-0-content`));
   await ui.click('▤ Збірка вже завантажена');
   ui.fixture.dialogs.push('/new.zip'); await ui.click('Обрати ZIP…');
-  await ui.click('Продовжити →', ui.document.getElementById('client-step-1-content'));
-  await ui.click('Продовжити →', ui.document.getElementById('client-step-2-content'));
+  await ui.click('Продовжити →', ui.document.getElementById(`${mode}-step-1-content`));
+  await ui.click('Продовжити →', ui.document.getElementById(`${mode}-step-2-content`));
 }
 async function until(predicate) {
   const deadline = Date.now() + 2500;
@@ -16,17 +16,17 @@ async function until(predicate) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 }
-test('unchanged transfer navigation preserves operation-only destination and custom folder name', async () => {
+test('unchanged server transfer navigation preserves chosen destination and custom folder name', async () => {
   const ui = await app();
   try {
-    await review(ui);
+    await ui.click('▤Сервер'); await review(ui, 'server');
     ui.fixture.dialogs.push('/my-destination'); await ui.click('Вибрати місце');
     const input = ui.document.querySelector('.install-name input');
     input.value = 'My custom instance';
     input.dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
     await ui.settle();
-    ui.document.querySelector('#client-step-2-heading button').click(); await ui.settle();
-    await ui.click('Продовжити →', ui.document.getElementById('client-step-2-content'));
+    ui.document.querySelector('#server-step-2-heading button').click(); await ui.settle();
+    await ui.click('Продовжити →', ui.document.getElementById('server-step-2-content'));
     assert.equal(ui.document.querySelector('.install-name input').value, 'My custom instance');
     await ui.click('Підготувати й перевірити');
     const request = ui.fixture.commands.find(item => item.command === 'prepare_installation').args.request;

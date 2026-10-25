@@ -71,7 +71,6 @@
 
 <section class="card catalog-card">
   <div class="card-heading"><h2>{t.catalog}</h2><button class="secondary" disabled={!desktop || busy} onclick={fetchCatalog}>{busy ? t.loading : t.refresh}</button></div>
-  <p class="muted">{t.catalogHint}</p>
   {#if error}<div class="error" role="alert">{error}</div>{/if}
   {#if !visible.length && !busy && !error}<p class="muted">{t.empty}</p>{/if}
   <div class="release-list" aria-busy={busy}>

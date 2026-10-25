@@ -19,7 +19,7 @@ test('real app advances accordion, remembers Prism destination and keeps transac
     assert.equal(ui.document.activeElement.id, 'client-step-3-heading');
     assert.equal(ui.document.getElementById('client-step-0-content').hidden, true);
     assert.equal(ui.document.getElementById('client-step-3-content').hidden, false);
-    assert.match(ui.document.getElementById('client-step-3-content').textContent, /\/instances/);
+    assert.doesNotMatch(ui.document.querySelector('.installation-card').textContent, /\/instances/);
     await ui.click('Підготувати й перевірити');
     const request = ui.fixture.commands.find(item => item.command === 'prepare_installation').args.request;
     assert.equal(request.parent, '/instances');
@@ -94,9 +94,11 @@ test('moved Prism preference is reported and never silently reused or erased', a
     assert.match(ui.document.querySelector('[role="alert"]').textContent, /missing directory/);
     assert.equal(ui.fixture.settings.prismInstancesDirectory, '/moved');
     assert.equal(ui.button('Підготувати й перевірити').disabled, true);
-    ui.fixture.dialogs.push('/override'); await ui.click('Вибрати місце');
+    await ui.click('Налаштувати Prism');
+    ui.fixture.dialogs.push('/override'); await ui.click('Вибрати папку…');
+    await ui.click('Зберегти'); await ui.click('◈Клієнт');
     await ui.click('Підготувати й перевірити');
     assert.equal(ui.fixture.commands.find(item => item.command === 'prepare_installation').args.request.parent, '/override');
-    assert.equal(ui.fixture.settings.prismInstancesDirectory, '/moved');
+    assert.equal(ui.fixture.settings.prismInstancesDirectory, '/override');
   } finally { await ui.close(); }
 });

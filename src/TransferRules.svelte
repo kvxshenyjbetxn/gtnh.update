@@ -4,8 +4,8 @@
   import { messages } from './i18n';
   import type { Rule } from './types';
 
-  let { rules = $bindable(), source, language, disabled, client, desktop, onChange, picking = $bindable(false) }: {
-    rules: Rule[]; source: string; language: 'uk' | 'en'; disabled: boolean; client: boolean;
+  let { rules = $bindable(), source, language, disabled, desktop, onChange, picking = $bindable(false) }: {
+    rules: Rule[]; source: string; language: 'uk' | 'en'; disabled: boolean;
     desktop: boolean; onChange: () => void; picking?: boolean;
   } = $props();
   let error = $state('');
@@ -30,7 +30,6 @@
 </script>
 
 <fieldset disabled={disabled || picking}>
-  <p class="muted">{client ? t.clientHint : t.serverHint}</p>
   <p class="transfer-summary">{t.enabledRules}: <strong>{rules.filter(rule => rule.enabled).length}</strong> / {rules.length}</p>
   <details class="rules-details">
     <summary>{t.allRules}</summary>
@@ -46,7 +45,7 @@
         </div>
       {/each}
     </div>
-    <div class="add-form"><div class="picker-actions"><button class="secondary" disabled={!desktop || !source} onclick={() => pickRules(false)}>+ {t.addFile}</button><button class="secondary" disabled={!desktop || !source} onclick={() => pickRules(true)}>+ {t.addFolder}</button></div><p class="muted small">{t.selectionHint}</p></div>
+    <div class="add-form"><div class="picker-actions"><button class="secondary" disabled={!desktop || !source} onclick={() => pickRules(false)}>+ {t.addFile}</button><button class="secondary" disabled={!desktop || !source} onclick={() => pickRules(true)}>+ {t.addFolder}</button></div></div>
   </details>
   {#if error}<div class="error" role="alert">{error}</div>{/if}
   {#if notice}<p class="muted" role="status">{notice}</p>{/if}

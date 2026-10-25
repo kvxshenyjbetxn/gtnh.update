@@ -7,9 +7,9 @@
   import type { Rule } from './types';
   import { transactionBusy } from './update-flow';
 
-  let { language, desktop, request = $bindable(null), busy = $bindable(false), defaultParent, onStatus }: {
+  let { language, desktop, request = $bindable(null), busy = $bindable(false), defaultParent, onStatus, onSettings }: {
     language: 'uk' | 'en'; desktop: boolean; request: InstallRequest | null; busy: boolean;
-    defaultParent: string | null; onStatus: (status: InstallStatus | null) => void;
+    defaultParent: string | null; onStatus: (status: InstallStatus | null) => void; onSettings: () => void;
   } = $props();
   let t = $derived(messages[language]);
   let status = $state<InstallStatus | null>(null);
@@ -22,7 +22,9 @@
   let working = $derived(status?.phase === 'preparing' || status?.phase === 'copying');
   let shown = $derived(!!request || !!status?.phase);
   let preview = $derived(status?.phase === 'preview' ? status.preview : null);
-  let files = $derived(preview?.files.filter(file => !file.directory) ?? []);
+  let entries = $derived(preview?.files ?? []);
+  let files = $derived(entries.filter(file => !file.directory));
+  let folders = $derived(entries.filter(file => file.directory));
   let unanswered = $derived(preview ? unresolvedConflicts(preview, decisions).length : 0);
 
   $effect(() => { busy = transactionBusy(status?.phase ?? '', sending); });
@@ -34,9 +36,14 @@
       parent = defaultParent ?? ''; error = ''; decisions = {};
     });
   });
+  $effect(() => {
+    const savedParent = defaultParent;
+    if (request?.client) parent = savedParent ?? '';
+  });
   async function pickDestination() {
+    if (!desktop || !request || request.client || sending) return;
     try {
-      const selected = await open({ directory: true, multiple: false, title: request?.client ? t.prismDestination : t.serverDestination, defaultPath: parent || undefined });
+      const selected = await open({ directory: true, multiple: false, title: t.serverDestination, defaultPath: parent || undefined });
       if (selected && !Array.isArray(selected)) parent = selected;
     } catch (e) { error = String(e); }
   }
@@ -83,13 +90,11 @@
     <div class="card-heading"><h2>{t.install}</h2><button class="secondary" disabled={working || sending} onclick={close}>{active ? t.cancelDownload : t.close}</button></div>
     {#if error}<div class="error" role="alert">{error}</div>{/if}
     {#if request && !active}
-      <code class="directory">{request.localPath ?? request.url}</code>
-      <p class="muted">{request.client ? t.prismDestination : t.serverDestination}</p>
-      <button class="secondary" disabled={sending} onclick={pickDestination}>{t.selectDestination}</button>
-      {#if parent}<code class="directory">{parent}</code>{/if}
+      {#if !request.client}
+        <button class="secondary" disabled={sending} onclick={pickDestination}>{t.selectDestination}</button>
+        {#if parent}<code class="directory">{parent}</code>{/if}
+      {:else if !parent}<button class="secondary" disabled={sending} onclick={onSettings}>{t.configurePrism}</button>{/if}
       <label class="install-name">{t.newFolderName}<input bind:value={name} disabled={sending} /></label>
-      <p class="muted">{t.installSource}: <code>{request.source}</code></p>
-      <p class="muted">{t.installRulesHint}</p>
       <button class="primary" disabled={!parent || !name || sending} onclick={prepare}>{t.prepareInstallation}</button>
     {/if}
     {#if working}
@@ -99,13 +104,15 @@
     {/if}
     {#if preview}
       <h3>{t.transferPreview}</h3><code class="directory">{preview.destination}</code>
-      <p>{t.transferCount}: {files.length}</p>
+      <p>{t.transferCount}: {files.length} · {t.transferFolders}: {folders.length}</p>
       <p class="notice">{t.installWarning}</p>
-      {#if preview.missing.length}<details><summary>{t.skippedMissing} ({preview.missing.length})</summary>{#each preview.missing as path}<code class="directory">{path}</code>{/each}</details>{/if}
-      <details open={files.some(file => file.exists && file.conflict === 'ask')}><summary>{t.transferFiles}</summary>
-        <div class="transfer-list">{#each files as file (file.path)}
+      {#if !entries.length}<p class="notice" role="status">{t.nothingToTransfer}</p>{/if}
+      {#if preview.missing.length}<details open={!entries.length}><summary>{t.skippedMissing} ({preview.missing.length})</summary>{#each preview.missing as path}<code class="directory">{path}</code>{/each}</details>{/if}
+      <details open><summary>{t.transferFiles}</summary>
+        <div class="transfer-list">{#each entries as file (file.path)}
           <div class="rule-row"><code class="rule-path">{file.path}</code>
-            {#if file.exists && file.conflict === 'ask'}
+            {#if file.directory}<span class="policy">{t.copyFolder}</span>
+            {:else if file.exists && file.conflict === 'ask'}
               <select aria-label={`${t.conflict}: ${file.path}`} value={decisions[file.path] ?? 'ask'} onchange={e => { decisions[file.path] = e.currentTarget.value as Rule['conflict']; }}><option value="ask">{t.ask}</option><option value="replace">{t.replace}</option><option value="keep">{t.keep}</option></select>
             {:else}<span class="policy">{file.exists ? (file.conflict === 'keep' ? t.keep : t.replace) : t.copyFile}</span>{/if}
           </div>

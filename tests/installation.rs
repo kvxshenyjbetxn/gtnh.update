@@ -42,6 +42,61 @@ fn setup() -> (
 }
 
 #[test]
+fn selected_custom_folders_transfer_empty_directories_and_nested_contents_in_prism_layouts() {
+    for game in [".minecraft", "minecraft"] {
+        let (dir, _source, zip, target) = setup();
+        let instance = dir.path().join("Old Prism instance");
+        let source = instance.join(game);
+        fs::create_dir_all(source.join("hui")).unwrap();
+        fs::create_dir_all(source.join("custom folder/nested/empty")).unwrap();
+        fs::write(source.join("custom folder/nested/data.txt"), "user data").unwrap();
+        archive(
+            &zip,
+            &[
+                ("Pack/instance.cfg", "[General]\nInstanceType=OneSix\n"),
+                ("Pack/mmc-pack.json", "{}"),
+                (&format!("Pack/{game}/config/new.cfg"), "new default"),
+            ],
+        );
+        let selected = gtnh_core::selection::source_directory(&instance, true).unwrap();
+        let prepared = prepare(
+            &zip,
+            Path::new(&selected),
+            &target,
+            true,
+            &[
+                rule("hui", Conflict::Replace),
+                rule("custom folder", Conflict::Replace),
+            ],
+            |_| {},
+        )
+        .unwrap();
+        assert!(prepared.preview().missing.is_empty());
+        assert!(prepared
+            .preview()
+            .files
+            .iter()
+            .any(|file| file.path == "hui" && file.directory));
+        prepared.finish(&[], |_| {}).unwrap();
+        let result = target.join(game);
+        assert!(result.join("hui").is_dir());
+        assert!(result.join("custom folder/nested/empty").is_dir());
+        assert_eq!(
+            fs::read_to_string(result.join("custom folder/nested/data.txt")).unwrap(),
+            "user data"
+        );
+        assert_eq!(
+            fs::read_to_string(source.join("custom folder/nested/data.txt")).unwrap(),
+            "user data"
+        );
+        assert_eq!(
+            fs::read_to_string(result.join("config/new.cfg")).unwrap(),
+            "new default"
+        );
+    }
+}
+
+#[test]
 fn local_folder_is_staged_and_left_unchanged_after_transfer() {
     for client in [false, true] {
         let (dir, source, _zip, target) = setup();
