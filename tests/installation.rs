@@ -647,16 +647,99 @@ fn unsafe_archives_never_publish_or_modify_source() {
 }
 
 #[test]
-fn case_aliases_and_file_directory_collisions_are_rejected() {
+fn file_case_aliases_and_file_directory_collisions_are_rejected() {
     for files in [
-        vec![("mods/a.jar", "a"), ("Mods/b.jar", "b"), ("config/a", "c")],
+        vec![("mods/a.jar", "a"), ("mods/A.jar", "b"), ("config/a", "c")],
+        vec![
+            ("config/X/a.cfg", "a"),
+            ("config/x/a.cfg", "b"),
+            ("mods/m.jar", "m"),
+        ],
         vec![("mods/a", "a"), ("mods/a/child", "b"), ("config/a", "c")],
+        vec![("mods/a", "a"), ("mods/A/child", "b"), ("config/a", "c")],
     ] {
         let (_dir, source, zip, target) = setup();
         archive(&zip, &files);
         assert!(prepare(&zip, &source, &target, false, &[], |_| {}).is_err());
         assert!(!target.exists());
     }
+}
+
+// On Windows/macOS both spellings merge into one folder, on Linux they stay separate.
+fn read_either(root: &Path, spellings: [&str; 2], rest: &str) -> String {
+    spellings
+        .iter()
+        .find_map(|s| fs::read_to_string(root.join(s).join(rest)).ok())
+        .unwrap()
+}
+
+#[test]
+fn directories_differing_only_by_case_are_installed() {
+    let (_dir, source, zip, target) = setup();
+    archive(
+        &zip,
+        &[
+            ("mods/a.jar", "jar"),
+            ("config/Thaumcraft[thaumcraft]/lang/de_DE.lang", "de"),
+            ("config/Thaumcraft[Thaumcraft]/lang/fr_FR.lang", "fr"),
+        ],
+    );
+    prepare(&zip, &source, &target, false, &[], |_| {})
+        .unwrap()
+        .finish(&[], |_| {})
+        .unwrap();
+    let names = [
+        "config/Thaumcraft[thaumcraft]",
+        "config/Thaumcraft[Thaumcraft]",
+    ];
+    assert_eq!(read_either(&target, names, "lang/de_DE.lang"), "de");
+    assert_eq!(read_either(&target, names, "lang/fr_FR.lang"), "fr");
+}
+
+#[test]
+fn transfer_into_differently_cased_directory_is_allowed() {
+    let (_dir, source, zip, target) = setup();
+    archive(
+        &zip,
+        &[
+            ("mods/a.jar", "jar"),
+            ("config/Mod[mod]/lang/new.lang", "new"),
+        ],
+    );
+    fs::create_dir_all(source.join("config/mod[mod]/lang")).unwrap();
+    fs::write(source.join("config/mod[mod]/lang/old.lang"), "old").unwrap();
+    prepare(
+        &zip,
+        &source,
+        &target,
+        false,
+        &[rule("config/mod[mod]", Conflict::Replace)],
+        |_| {},
+    )
+    .unwrap()
+    .finish(&[], |_| {})
+    .unwrap();
+    let names = ["config/Mod[mod]", "config/mod[mod]"];
+    assert_eq!(read_either(&target, names, "lang/new.lang"), "new");
+    assert_eq!(read_either(&target, names, "lang/old.lang"), "old");
+}
+
+#[test]
+fn transferred_file_differing_only_by_case_from_pack_file_is_rejected() {
+    let (_dir, source, zip, target) = setup();
+    archive(&zip, &[("config/a.cfg", "new")]);
+    fs::create_dir(source.join("config")).unwrap();
+    fs::write(source.join("config/A.cfg"), "old").unwrap();
+    assert!(prepare(
+        &zip,
+        &source,
+        &target,
+        false,
+        &[rule("config/A.cfg", Conflict::Replace)],
+        |_| {}
+    )
+    .is_err());
+    assert!(!target.exists());
 }
 
 #[test]
@@ -940,4 +1023,55 @@ fn source_symlinks_and_symlink_swap_after_preview_are_rejected() {
     symlink(dir.path().join("secret"), source.join("options.txt")).unwrap();
     assert!(prepared.finish(&[], |_| {}).is_err());
     assert!(!target.exists());
+}
+
+#[test]
+fn stale_staging_removes_only_exact_real_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for name in [".gtnh-install-AbC123", ".gtnh-install-zzzzzz"] {
+        fs::create_dir_all(root.join(name).join("payload")).unwrap();
+        fs::write(root.join(name).join("payload/big.bin"), "x").unwrap();
+    }
+    let keep_dirs = [
+        ".gtnh-install-short",
+        ".gtnh-install-toolong1",
+        ".gtnh-install-ab_123",
+        ".gtnh-install-",
+        "gtnh-install-abcdef",
+        "instance",
+    ];
+    for name in keep_dirs {
+        fs::create_dir(root.join(name)).unwrap();
+    }
+    fs::write(root.join(".gtnh-install-fileee"), "file").unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("data"), "data").unwrap();
+    let link = root.join(".gtnh-install-link12");
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(outside.path(), &link).is_ok();
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_dir(outside.path(), &link).is_ok();
+    assert_eq!(gtnh_core::installation::remove_stale_staging(root), Ok(2));
+    assert!(!root.join(".gtnh-install-AbC123").exists());
+    assert!(!root.join(".gtnh-install-zzzzzz").exists());
+    for name in keep_dirs {
+        assert!(root.join(name).is_dir(), "{name}");
+    }
+    assert!(root.join(".gtnh-install-fileee").is_file());
+    if linked {
+        assert!(fs::symlink_metadata(&link).is_ok());
+    }
+    assert!(outside.path().join("data").is_file());
+    assert!(gtnh_core::installation::remove_stale_staging(&root.join("missing")).is_err());
+}
+
+#[test]
+fn prepare_cleans_stale_staging_next_to_the_destination() {
+    let (dir, source, zip, target) = setup();
+    let stale = dir.path().join(".gtnh-install-old123");
+    fs::create_dir(&stale).unwrap();
+    archive(&zip, &[("mods/a.jar", "jar"), ("config/a.cfg", "cfg")]);
+    let _prepared = prepare(&zip, &source, &target, false, &[], |_| {}).unwrap();
+    assert!(!stale.exists());
 }

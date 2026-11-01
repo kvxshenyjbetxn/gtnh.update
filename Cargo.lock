@@ -1526,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "gtnh-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "fs2",
  "reqwest 0.12.28",
@@ -1544,14 +1544,16 @@ dependencies = [
 
 [[package]]
 name = "gtnh-updater"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "gtnh-core",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tempfile",
 ]
 
 [[package]]

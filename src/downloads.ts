@@ -6,7 +6,7 @@ export interface DownloadStatus {
   id: string;
   revision: number;
   url: string;
-  state: 'downloading' | 'completed' | 'installed' | 'cancelled' | 'failed';
+  state: 'downloading' | 'completed' | 'cancelled' | 'failed' | 'deleted';
   received: number;
   total: number | null;
   path: string | null;
@@ -24,6 +24,7 @@ export const downloads = {
   status: () => invoke<DownloadStatus[]>('download_status'),
   start: (url: string) => invoke<void>('start_download', { url }),
   cancel: (id: string) => invoke<void>('cancel_download', { id }),
+  remove: (url: string) => invoke<void>('delete_download', { url }),
 };
 
 // Match by file URL, not the selected variant or the most recent global job.
@@ -38,6 +39,7 @@ export function downloadsForArtifacts(
 }
 
 // Subscribe before querying; per-URL revisions protect against late snapshots/events.
+// A 'deleted' status stays as a tombstone so stale events cannot bring the job back.
 // Backend state outlives every component, including switching to Settings.
 export function watchDownloads(
   transport: DownloadTransport,
@@ -51,7 +53,7 @@ export function watchDownloads(
   function accept(status: DownloadStatus) {
     if (!disposed && status.revision > (latest.get(status.url)?.revision ?? -1)) {
       latest.set(status.url, status);
-      onStatus([...latest.values()]);
+      onStatus([...latest.values()].filter(item => item.state !== 'deleted'));
     }
   }
   void (async () => {

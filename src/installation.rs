@@ -71,7 +71,9 @@ fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
-// Track every component, not just full filenames: Mods/a and mods/b collide on Windows.
+// Track every component, not just full filenames. Directories differing only by case
+// are the same directory (they merge on case-insensitive filesystems); files whose
+// full paths match case-insensitively, and file/directory clashes, are rejected.
 fn register(
     names: &mut HashMap<String, (String, bool)>,
     path: &str,
@@ -81,8 +83,8 @@ fn register(
     for end in 1..=parts.len() {
         let name = parts[..end].join("/");
         let is_dir = end < parts.len() || directory;
-        if let Some((previous, was_dir)) = names.get(&name.to_lowercase()) {
-            if *previous != name || *was_dir != is_dir || (!is_dir && end == parts.len()) {
+        if let Some((_, was_dir)) = names.get(&name.to_lowercase()) {
+            if *was_dir != is_dir || !is_dir {
                 return Err(format!("Conflicting archive/transfer paths: {name}"));
             }
         } else {
@@ -350,6 +352,27 @@ fn stage_folder(pack: &Path, into: &Path, progress: &impl Fn(Progress)) -> Resul
     Ok(())
 }
 
+const STAGING_PREFIX: &str = ".gtnh-install-";
+
+/// Removes staging folders left behind by a killed installation; returns how many were removed.
+pub fn remove_stale_staging(parent: &Path) -> Result<usize, String> {
+    let mut removed = 0;
+    for item in fs::read_dir(parent).map_err(error)?.flatten() {
+        let matches = item.file_name().to_str().is_some_and(|name| {
+            name.strip_prefix(STAGING_PREFIX).is_some_and(|suffix| {
+                suffix.len() == 6 && suffix.bytes().all(|b| b.is_ascii_alphanumeric())
+            })
+        });
+        // symlink_metadata never follows links or junctions.
+        let real_dir = fs::symlink_metadata(item.path())
+            .is_ok_and(|m| m.file_type().is_dir() && !m.file_type().is_symlink());
+        if matches && real_dir && fs::remove_dir_all(item.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 pub fn prepare(
     archive: &Path,
     source: &Path,
@@ -387,6 +410,8 @@ pub fn prepare(
     if destination.try_exists().map_err(error)? || fs::symlink_metadata(&destination).is_ok() {
         return Err("Destination already exists; choose a new folder name".into());
     }
+    // Only one installation runs per process, so leftovers belong to a killed run.
+    let _ = remove_stale_staging(&parent);
     let temporary = tempfile::Builder::new()
         .prefix(".gtnh-install-")
         .tempdir_in(parent)
@@ -462,7 +487,9 @@ pub fn prepare(
         file.exists = target.exists();
         // Matching regular files are expected conflicts, not duplicate archive entries.
         if let Some((name, directory)) = aliases.get(&file.path.to_lowercase()) {
-            if name != &file.path || *directory != file.directory {
+            // Parent directories merge regardless of case; a file's own name must match.
+            let last = |p: &str| p.rsplit('/').next().unwrap_or_default().to_owned();
+            if *directory != file.directory || (!file.directory && last(name) != last(&file.path)) {
                 return Err(format!(
                     "Incompatible file/directory or letter case: {}",
                     file.path

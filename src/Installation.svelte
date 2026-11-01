@@ -3,7 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { open } from '@tauri-apps/plugin-dialog';
   import { messages } from './i18n';
-  import { packName, unresolvedConflicts, watchInstallation, type InstallRequest, type InstallStatus } from './installation';
+  import { formatBytes, groupTransfers, packName, unresolvedConflicts, watchInstallation, type InstallRequest, type InstallStatus, type Transfer } from './installation';
   import type { Rule } from './types';
   import { transactionBusy } from './update-flow';
 
@@ -25,6 +25,10 @@
   let entries = $derived(preview?.files ?? []);
   let files = $derived(entries.filter(file => !file.directory));
   let folders = $derived(entries.filter(file => file.directory));
+  let asks = $derived(files.filter(file => file.exists && file.conflict === 'ask'));
+  let groups = $derived(groupTransfers(entries));
+  let listOpen = $state(false);
+  let limit = $state(200);
   let unanswered = $derived(preview ? unresolvedConflicts(preview, decisions).length : 0);
 
   $effect(() => { busy = transactionBusy(status?.phase ?? '', sending); });
@@ -33,13 +37,14 @@
     const next = request;
     if (next) untrack(() => {
       name = packName(next.localPath ?? next.url);
-      parent = defaultParent ?? ''; error = ''; decisions = {};
+      parent = defaultParent ?? ''; error = ''; decisions = {}; listOpen = false; limit = 200;
     });
   });
   $effect(() => {
     const savedParent = defaultParent;
     if (request?.client) parent = savedParent ?? '';
   });
+  const policy = (file: Transfer) => file.directory ? t.copyFolder : file.exists ? (file.conflict === 'keep' ? t.keep : t.replace) : t.copyFile;
   async function pickDestination() {
     if (!desktop || !request || request.client || sending) return;
     try {
@@ -52,7 +57,7 @@
     sending = true; error = ''; decisions = {};
     try {
       await invoke('prepare_installation', { request: { ...$state.snapshot(request), parent, name } });
-      status = await invoke<InstallStatus>('installation_status');
+      status = await invoke<InstallStatus | null>('installation_status') ?? status;
       request = null;
     } catch (e) { error = String(e); }
     finally { sending = false; }
@@ -61,7 +66,7 @@
     sending = true; error = '';
     try {
       await invoke('finish_installation', { decisions: Object.entries(decisions).map(([path, conflict]) => ({ path, conflict })) });
-      status = await invoke<InstallStatus>('installation_status');
+      status = await invoke<InstallStatus | null>('installation_status') ?? status;
     } catch (e) { error = String(e); }
     finally { sending = false; }
   }
@@ -69,7 +74,7 @@
     sending = true; error = '';
     try {
       await invoke('cancel_installation');
-      status = await invoke<InstallStatus>('installation_status');
+      status = await invoke<InstallStatus | null>('installation_status') ?? status;
       request = null;
     } catch (e) { error = String(e); }
     finally { sending = false; }
@@ -77,13 +82,21 @@
   onMount(() => {
     if (!desktop) return;
     return watchInstallation({
-      status: () => invoke<InstallStatus>('installation_status'),
+      status: since => invoke<InstallStatus | null>('installation_status', { since }),
       repeat: callback => { const timer = setInterval(callback, 500); return () => clearInterval(timer); },
     }, next => {
       if (!status || next.revision > status.revision) status = next;
     }, e => { error = String(e); });
   });
 </script>
+
+{#snippet row(file: Transfer)}
+  <div class="rule-row"><code class="rule-path">{file.path}</code>
+    {#if !file.directory && file.exists && file.conflict === 'ask'}
+      <select aria-label={`${t.conflict}: ${file.path}`} value={decisions[file.path] ?? 'ask'} onchange={e => { decisions[file.path] = e.currentTarget.value as Rule['conflict']; }}><option value="ask">{t.ask}</option><option value="replace">{t.replace}</option><option value="keep">{t.keep}</option></select>
+    {:else}<span class="policy">{policy(file)}</span>{/if}
+  </div>
+{/snippet}
 
 {#if shown}
   <section class="card installation-card" aria-label={t.install}>
@@ -108,23 +121,32 @@
       <p class="notice">{t.installWarning}</p>
       {#if !entries.length}<p class="notice" role="status">{t.nothingToTransfer}</p>{/if}
       {#if preview.missing.length}<details open={!entries.length}><summary>{t.skippedMissing} ({preview.missing.length})</summary>{#each preview.missing as path}<code class="directory">{path}</code>{/each}</details>{/if}
-      <details open><summary>{t.transferFiles}</summary>
-        <div class="transfer-list">{#each entries as file (file.path)}
-          <div class="rule-row"><code class="rule-path">{file.path}</code>
-            {#if file.directory}<span class="policy">{t.copyFolder}</span>
-            {:else if file.exists && file.conflict === 'ask'}
-              <select aria-label={`${t.conflict}: ${file.path}`} value={decisions[file.path] ?? 'ask'} onchange={e => { decisions[file.path] = e.currentTarget.value as Rule['conflict']; }}><option value="ask">{t.ask}</option><option value="replace">{t.replace}</option><option value="keep">{t.keep}</option></select>
-            {:else}<span class="policy">{file.exists ? (file.conflict === 'keep' ? t.keep : t.replace) : t.copyFile}</span>{/if}
-          </div>
-        {/each}</div>
-      </details>
+      {#if asks.length}
+        <h4>{t.needsDecision}</h4>
+        <div class="transfer-list">{#each asks as file (file.path)}{@render row(file)}{/each}</div>
+      {/if}
+      {#if entries.length}
+        <details open><summary>{t.transferTopLevel} ({groups.length})</summary>
+          <div class="transfer-list">{#each groups as group (group.path)}
+            <div class="rule-row"><code class="rule-path">{group.path}</code>
+              {#if group.directory}<span class="policy">{t.copyFolder} · {group.files} {t.filesSummary} · {formatBytes(group.bytes, language)}</span>
+              {:else}<span class="policy">{policy(group.file)}</span>{/if}
+            </div>
+          {/each}</div>
+        </details>
+        <details ontoggle={e => { listOpen = e.currentTarget.open; if (!listOpen) limit = 200; }}><summary>{t.allTransferFiles} ({entries.length})</summary>
+          {#if listOpen}
+            <div class="transfer-list">{#each entries.slice(0, limit) as file (file.path)}{@render row(file)}{/each}</div>
+            {#if limit < entries.length}<button class="secondary" onclick={() => { limit += 500; }}>{t.showMore}</button>{/if}
+          {/if}
+        </details>
+      {/if}
       {#if unanswered}<p class="muted">{t.resolveConflicts}: {unanswered}</p>{/if}
       <button class="primary" disabled={sending || unanswered > 0} onclick={finish}>{t.confirmInstallation}</button>
     {/if}
     {#if !request && status?.phase === 'completed'}
       <p role="status">{t.installComplete}</p><code class="directory">{status.destination}</code>
       <p class="muted">{status.client ? t.prismReady : t.serverReady}</p>
-      {#if status.warning}<div class="notice">{status.warning}</div>{/if}
     {:else if !request && status?.phase === 'failed'}
       <div class="error" role="alert">{t.installFailed}<pre>{status.error}</pre></div>
     {/if}

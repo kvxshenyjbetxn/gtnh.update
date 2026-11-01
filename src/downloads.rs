@@ -45,6 +45,30 @@ pub async fn download(
     transfer(&client, url, directory, cancel, progress).await
 }
 
+/// Size of the remote archive from a HEAD request; None if unknown or not 2xx.
+pub async fn remote_size(url: &str) -> Result<Option<u64>, String> {
+    validate_url(url)?;
+    head_size(&archive_client()?, url).await
+}
+
+async fn head_size(client: &reqwest::Client, url: &str) -> Result<Option<u64>, String> {
+    let response = client
+        .head(url)
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+    // Response::content_length is unreliable for HEAD; read the header directly.
+    Ok(response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok()))
+}
+
 fn archive_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .user_agent("GTNH-Updater/0.1.0")
@@ -212,6 +236,25 @@ mod tests {
         let last = updates.last().unwrap();
         assert_eq!(last.received, 4);
         assert_eq!(last.total, Some(4));
+    }
+    #[tokio::test]
+    async fn head_reports_content_length_only_on_success() {
+        for (response, expected) in [
+            (
+                &b"HTTP/1.1 200 OK\r\nContent-Length: 732488324\r\n\r\n"[..],
+                Some(732488324),
+            ),
+            (
+                &b"HTTP/1.1 404 Not Found\r\nContent-Length: 12\r\n\r\n"[..],
+                None,
+            ),
+            (&b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n"[..], None),
+        ] {
+            let (url, server) = fixture(response, false).await;
+            assert_eq!(head_size(&client(), &url).await.unwrap(), expected);
+            server.await.unwrap();
+        }
+        assert!(remote_size("http://127.0.0.1/a.zip").await.is_err());
     }
     #[tokio::test]
     async fn supports_unknown_size() {

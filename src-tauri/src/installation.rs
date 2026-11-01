@@ -4,7 +4,7 @@ use gtnh_core::{
 };
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Mutex};
-use tauri::{Emitter, Manager, State};
+use tauri::{Manager, State};
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,13 +17,11 @@ pub(crate) struct Status {
     preview: Option<Preview>,
     destination: Option<String>,
     error: Option<String>,
-    warning: Option<String>,
 }
 #[derive(Default)]
 struct Job {
     status: Status,
     prepared: Option<Prepared>,
-    archive: Option<PathBuf>,
 }
 #[derive(Default)]
 pub(crate) struct InstallStore(Mutex<Job>);
@@ -48,10 +46,11 @@ impl InstallStore {
         };
         Ok(())
     }
-    pub(crate) fn start_download<T>(
+    // Runs `act` unless an installation in progress uses this archive.
+    pub(crate) fn while_unused<T>(
         &self,
         url: &str,
-        start: impl FnOnce() -> Result<T, String>,
+        act: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
         let job = self.0.lock().map_err(|e| e.to_string())?;
         if job.status.url == url
@@ -62,7 +61,7 @@ impl InstallStore {
         {
             return Err("This archive is being installed".into());
         }
-        start()
+        act()
     }
     fn progress(&self, progress: Progress) {
         if let Ok(mut job) = self.0.lock() {
@@ -80,8 +79,16 @@ impl InstallStore {
     }
 }
 #[tauri::command]
-pub(crate) fn installation_status(store: State<'_, InstallStore>) -> Result<Status, String> {
-    Ok(store.0.lock().map_err(|e| e.to_string())?.status.clone())
+pub(crate) fn installation_status(
+    store: State<'_, InstallStore>,
+    since: Option<u64>,
+) -> Result<Option<Status>, String> {
+    let job = store.0.lock().map_err(|e| e.to_string())?;
+    Ok(changed_status(&job.status, since))
+}
+// Polling passes the last revision it accepted so a large unchanged preview is never serialized again.
+fn changed_status(status: &Status, since: Option<u64>) -> Option<Status> {
+    (since != Some(status.revision)).then(|| status.clone())
 }
 #[tauri::command]
 pub(crate) fn cancel_installation(store: State<'_, InstallStore>) -> Result<(), String> {
@@ -124,33 +131,16 @@ impl InstallRequest {
             _ => Err("Choose exactly one downloaded archive or local pack".into()),
         }
     }
-    fn resolve(
-        &self,
-        downloads: &crate::downloads::DownloadStore,
-    ) -> Result<(PathBuf, Option<PathBuf>), String> {
+    fn resolve(&self, downloads: &crate::downloads::DownloadStore) -> Result<PathBuf, String> {
         self.key()?;
         if let Some(url) = &self.url {
-            let path = downloads.completed_path(url)?;
-            Ok((path.clone(), Some(path)))
+            downloads.completed_path(url)
         } else {
-            Ok((
-                gtnh_core::pack_selection::validate(
-                    self.local_path.as_deref().ok_or("Missing local pack")?,
-                )?,
-                None,
-            ))
+            gtnh_core::pack_selection::validate(
+                self.local_path.as_deref().ok_or("Missing local pack")?,
+            )
         }
     }
-}
-fn cleanup_archive(owned: Option<&std::path::Path>) -> Option<String> {
-    owned.and_then(|path| {
-        std::fs::remove_file(path).err().map(|e| {
-            format!(
-                "Installed, but could not remove archive {}: {e}",
-                path.display()
-            )
-        })
-    })
 }
 #[tauri::command]
 pub(crate) fn prepare_installation(
@@ -164,8 +154,7 @@ pub(crate) fn prepare_installation(
     }
     let key = request.key()?;
     store.begin(key, request.client)?;
-    // Only a managed download is owned: user-selected ZIPs/folders must never be removed.
-    let (pack, owned_archive) = match request.resolve(&downloads) {
+    let pack = match request.resolve(&downloads) {
         Ok(resolved) => resolved,
         Err(error) => {
             store.fail(error.clone());
@@ -189,7 +178,6 @@ pub(crate) fn prepare_installation(
                     job.status.preview = Some(prepared.preview().clone());
                     job.status.revision += 1;
                     job.prepared = Some(prepared);
-                    job.archive = owned_archive;
                 }
             }
             Err(error) => app.state::<InstallStore>().fail(error),
@@ -203,34 +191,23 @@ pub(crate) fn finish_installation(
     store: State<'_, InstallStore>,
     decisions: Vec<Decision>,
 ) -> Result<(), String> {
-    let (prepared, archive, url) = {
+    let prepared = {
         let mut job = store.0.lock().map_err(|e| e.to_string())?;
         if job.status.phase != "preview" {
             return Err("No installation is ready to confirm".into());
         }
         let prepared = job.prepared.take().ok_or("Missing prepared installation")?;
-        let archive = job.archive.clone();
         job.status.phase = "copying".into();
         job.status.revision += 1;
-        (prepared, archive, job.status.url.clone())
+        prepared
     };
     tauri::async_runtime::spawn_blocking(move || {
         let result = prepared.finish(&decisions, |p| app.state::<InstallStore>().progress(p));
         match result {
             Ok(destination) => {
-                let warning = cleanup_archive(archive.as_deref());
-                if archive.is_some() {
-                    if let Ok(Some(status)) = app
-                        .state::<crate::downloads::DownloadStore>()
-                        .mark_installed(&url, &destination)
-                    {
-                        let _ = app.emit("download-progress", status);
-                    }
-                }
                 if let Ok(mut job) = app.state::<InstallStore>().0.lock() {
                     job.status.phase = "completed".into();
                     job.status.destination = Some(destination.to_string_lossy().into_owned());
-                    job.status.warning = warning;
                     job.status.revision += 1;
                 }
             }
@@ -244,7 +221,17 @@ pub(crate) fn finish_installation(
 mod tests {
     use super::*;
     #[test]
-    fn local_inputs_are_never_owned_or_deleted_and_ambiguous_inputs_fail() {
+    fn unchanged_revision_skips_status_payload() {
+        let status = Status {
+            revision: 7,
+            ..Default::default()
+        };
+        assert!(changed_status(&status, Some(7)).is_none());
+        assert_eq!(changed_status(&status, Some(6)).unwrap().revision, 7);
+        assert_eq!(changed_status(&status, None).unwrap().revision, 7);
+    }
+    #[test]
+    fn local_inputs_are_left_untouched_and_ambiguous_inputs_fail() {
         let directory =
             gtnh_core::pack_selection::validate(std::env::temp_dir().as_path()).unwrap();
         let local = directory.join(format!("gtnh-local-{}.zip", std::process::id()));
@@ -259,12 +246,10 @@ mod tests {
             rules: vec![],
         };
         assert!(request.key().is_ok());
-        let (path, owned) = request
+        let path = request
             .resolve(&crate::downloads::DownloadStore::default())
             .unwrap();
         assert_eq!(path, local.canonicalize().unwrap());
-        assert!(owned.is_none());
-        assert!(cleanup_archive(owned.as_deref()).is_none());
         assert_eq!(std::fs::read_to_string(&local).unwrap(), "user archive");
         request.url = Some("https://downloads.gtnewhorizons.com/ServerPacks/pack.zip".into());
         assert!(request.key().is_err());
@@ -274,14 +259,14 @@ mod tests {
     fn active_install_pins_only_its_archive_and_blocks_a_second_install() {
         let store = InstallStore::default();
         store.begin("one".into(), true).unwrap();
-        assert!(store.start_download("one", || Ok(())).is_err());
-        assert!(store.start_download("two", || Ok(())).is_ok());
+        assert!(store.while_unused("one", || Ok(())).is_err());
+        assert!(store.while_unused("two", || Ok(())).is_ok());
         assert!(store.begin("two".into(), false).is_err());
         store.0.lock().unwrap().status.phase = "preview".into();
-        assert!(store.start_download("one", || Ok(())).is_err());
+        assert!(store.while_unused("one", || Ok(())).is_err());
         assert!(store.begin("two".into(), false).is_err());
         store.fail("failed".into());
-        assert!(store.start_download("one", || Ok(())).is_ok());
+        assert!(store.while_unused("one", || Ok(())).is_ok());
         store.begin("two".into(), false).unwrap();
     }
 }

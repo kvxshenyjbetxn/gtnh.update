@@ -253,7 +253,7 @@
           <p>{t[installStatus.progress.stage]} · {installStatus.progress.done} / {installStatus.progress.total}</p>
           <progress aria-label={t.installProgress} max={installStatus.progress.total || undefined} value={installStatus.progress.total ? installStatus.progress.done : undefined}></progress>
         {:else if installStatus?.phase === 'preview'}<p>{t.transferPreview}</p>{/if}
-        {#if installStatus?.phase === 'completed'}<code class="directory">{installStatus.destination}</code>{#if installStatus.warning}<p>{installStatus.warning}</p>{/if}{/if}
+        {#if installStatus?.phase === 'completed'}<code class="directory">{installStatus.destination}</code>{/if}
         {#if installStatus?.phase === 'failed'}<pre>{installStatus.error}</pre>{/if}
         <button class="secondary" onclick={() => switchTab(lastMode)}>{t.backToUpdate}</button>
       </div>

@@ -18,6 +18,7 @@
   let downloadReady = $state(false);
   let starting = $state<Record<string, boolean>>({});
   let cancelling = $state<Record<string, boolean>>({});
+  let deleting = $state<Record<string, boolean>>({});
   let fileErrors = $state<Record<string, string>>({});
   let byUrl = $derived(new Map(statuses.map(status => [status.url, status])));
   let visible = $derived(releases.filter(r => includePrereleases || r.channel === 'stable'));
@@ -36,9 +37,14 @@
   async function fetchCatalog() {
     if (!desktop || busy) return;
     busy = true; error = '';
-    try { releases = await invoke<Release[]>('list_releases'); }
+    try { releases = await invoke<Release[]>('list_releases'); void adoptDownloads(); }
     catch (e) { error = String(e); }
     finally { busy = false; }
+  }
+  // Non-fatal; adopted archives arrive through download-progress events.
+  async function adoptDownloads() {
+    try { await invoke('adopt_downloads', { urls: releases.flatMap(r => r.artifacts.map(a => a.url)) }); }
+    catch { /* ignore */ }
   }
   async function open(url: string) {
     try { await invoke('open_release_url', { url }); }
@@ -56,6 +62,13 @@
     cancelling[status.id] = true; fileErrors[status.url] = '';
     try { await downloads.cancel(status.id); }
     catch (e) { fileErrors[status.url] = String(e); cancelling[status.id] = false; }
+  }
+  async function deleteArchive(url: string) {
+    if (deleting[url]) return;
+    deleting[url] = true; fileErrors[url] = '';
+    try { await downloads.remove(url); }
+    catch (e) { fileErrors[url] = String(e); }
+    finally { deleting[url] = false; }
   }
   onMount(() => {
     void fetchCatalog();
@@ -92,9 +105,9 @@
         </div>
         {#each jobs as job (job.status.id)}
           <DownloadItem {language} java={job.artifact.java} status={job.status}
-            starting={!downloadReady || !!starting[job.status.url]} cancelling={!!cancelling[job.status.id]}
+            starting={!downloadReady || !!starting[job.status.url]} cancelling={!!cancelling[job.status.id]} deleting={!!deleting[job.status.url]}
             error={fileErrors[job.status.url] || ''}
-            onRetry={() => startDownload(job.status.url)} onCancel={() => cancelDownload(job.status)}
+            onRetry={() => startDownload(job.status.url)} onCancel={() => cancelDownload(job.status)} onDelete={() => deleteArchive(job.status.url)}
             {canInstall} onInstall={() => onInstall(job.artifact)} />
         {/each}
         {#if artifact && fileErrors[artifact.url] && !jobs.some(job => job.status.url === artifact.url)}

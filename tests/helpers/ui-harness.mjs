@@ -27,7 +27,7 @@ async function compiledApp() {
   return bundle;
 }
 export const settings = () => ({ schemaVersion: 1, language: 'uk', theme: 'amoled', includePrereleases: false, clientSource: '/old', serverSource: '/server', prismInstancesDirectory: '/instances', clientRules: [{ path: 'saves', enabled: true, conflict: 'replace', custom: false }], serverRules: [{ path: 'config/JourneyMapServer', enabled: true, conflict: 'replace', custom: false }] });
-export function idle(revision = 0) { return { revision, phase: '', url: '', client: true, progress: null, preview: null, destination: null, error: null, warning: null }; }
+export function idle(revision = 0) { return { revision, phase: '', url: '', client: true, progress: null, preview: null, destination: null, error: null }; }
 export async function app(options = {}) {
   const fixture = {
     settings: settings(), status: idle(), commands: [], dialogs: [], listeners: new Set(), releases: [], downloads: [],
@@ -43,7 +43,7 @@ export async function app(options = {}) {
         case 'relative_selections': return ['extra.cfg'];
         case 'list_releases': return this.releases;
         case 'download_status': return this.downloads;
-        case 'installation_status': return structuredClone(this.status);
+        case 'installation_status': return args?.since === this.status.revision ? null : structuredClone(this.status);
         case 'prepare_installation': this.status = { ...idle(this.status.revision + 1), phase: 'preview', client: args.request.client, preview: { destination: '/instances/new', files: [], missing: [] } }; return;
         case 'cancel_installation': this.status = idle(this.status.revision + 1); return;
         case 'finish_installation': this.status = { ...idle(this.status.revision + 1), phase: 'completed', destination: '/instances/new' }; return;

@@ -106,3 +106,22 @@ test('each release row shows only its own files and current mode, keeping both J
   assert.deepEqual(downloadsForArtifacts(states, artifacts, 'server').map(job => job.status.url), [SERVER]);
   assert.deepEqual(downloadsForArtifacts(states, [{ mode: 'client', java: 'Java 17', url: 'another-release.zip' }], 'client'), []);
 });
+
+test('deleted status drops the job and stale events cannot bring it back', async () => {
+  let event;
+  let latest = [];
+  const stop = watchDownloads({
+    listen: async callback => { event = callback; return () => {}; },
+    status: async () => [status(CLIENT, 3, { state: 'completed' }), status(SERVER, 2, { state: 'completed' })],
+  }, value => { latest = value; }, error => assert.fail(String(error)), () => {});
+  await tick();
+  assert.equal(latest.length, 2);
+  event(status(CLIENT, 5, { state: 'deleted' }));
+  assert.deepEqual(latest.map(s => s.url), [SERVER]);
+  event(status(CLIENT, 4, { state: 'completed' }));
+  assert.deepEqual(latest.map(s => s.url), [SERVER]);
+  // A new download after deletion has a higher revision and reappears.
+  event(status(CLIENT, 6));
+  assert.deepEqual(latest.map(s => s.url).sort(), [CLIENT, SERVER].sort());
+  stop();
+});

@@ -2,12 +2,13 @@
   import { messages } from './i18n';
   import type { DownloadStatus } from './downloads';
 
-  let { language, java, status, starting, cancelling, error, onRetry, onCancel, canInstall, onInstall }: {
+  let { language, java, status, starting, cancelling, deleting, error, onRetry, onCancel, onDelete, canInstall, onInstall }: {
     language: 'uk' | 'en'; java: string; status: DownloadStatus;
-    starting: boolean; cancelling: boolean; error: string;
-    onRetry: () => void; onCancel: () => void; canInstall: boolean; onInstall: () => void;
+    starting: boolean; cancelling: boolean; deleting: boolean; error: string;
+    onRetry: () => void; onCancel: () => void; onDelete: () => void; canInstall: boolean; onInstall: () => void;
   } = $props();
   let t = $derived(messages[language]);
+  let confirming = $state(false);
   let percent = $derived(status.total ? Math.min(100, Math.floor(status.received / status.total * 100)) : null);
   function bytes(value: number) {
     return `${(value / 1024 / 1024).toLocaleString(language, { maximumFractionDigits: 1 })} MiB`;
@@ -26,10 +27,17 @@
   {:else if status.state === 'completed'}
     <p role="status">{t.downloadComplete}</p>
     <code class="directory">{status.path}</code>
-    <button class="primary" disabled={!canInstall || starting} onclick={onInstall}>{t.selectPack}</button>
+    <div class="download-details">
+      <button class="primary" disabled={!canInstall || starting || deleting} onclick={onInstall}>{t.selectPack}</button>
+      {#if confirming}
+        <span>{t.confirmDeleteArchive}</span>
+        <button class="secondary" disabled={deleting} onclick={onDelete}>{t.deleteArchive}</button>
+        <button class="secondary" disabled={deleting} onclick={() => { confirming = false; }}>{t.cancelDownload}</button>
+      {:else}
+        <button class="secondary" disabled={deleting} onclick={() => { confirming = true; }}>{t.deleteArchive}</button>
+      {/if}
+    </div>
     {#if !canInstall}<p class="muted small">{t.installSourceHint}</p>{/if}
-  {:else if status.state === 'installed'}
-    <p role="status">{t.installComplete}</p><code class="directory">{status.path}</code>
   {:else if status.state === 'cancelled'}
     <p role="status">{t.downloadCancelled}</p>
     <button class="secondary" disabled={starting} onclick={onRetry}>{t.retry}</button>

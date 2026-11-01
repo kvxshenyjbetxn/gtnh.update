@@ -72,8 +72,21 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            let directory = app.path().app_config_dir()?;
+            // A damaged downloads folder must not block startup.
+            let _ = app
+                .state::<downloads::DownloadStore>()
+                .restore(directory.join("downloads"));
+            // Staging folders of a killed installation can be several GB; best effort.
+            if let Some(instances) = gtnh_core::load_settings(&directory)
+                .ok()
+                .and_then(|s| s.prism_instances_directory)
+            {
+                let _ =
+                    gtnh_core::installation::remove_stale_staging(std::path::Path::new(&instances));
+            }
             app.manage(ConfigStore {
-                directory: app.path().app_config_dir()?,
+                directory,
                 lock: Mutex::new(()),
             });
             Ok(())
@@ -89,6 +102,8 @@ pub fn run() {
             list_releases,
             downloads::start_download,
             downloads::cancel_download,
+            downloads::delete_download,
+            downloads::adopt_downloads,
             downloads::download_status,
             installation::prepare_installation,
             installation::installation_status,
