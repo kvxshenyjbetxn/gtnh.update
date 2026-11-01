@@ -745,6 +745,31 @@ fn an_empty_destination_created_after_preview_is_never_replaced() {
 }
 
 #[test]
+fn unicode_destination_is_published() {
+    let (dir, source, zip, _) = setup();
+    let target = dir.path().join("новий-实例");
+    archive(&zip, &[("mods/a.jar", "jar"), ("config/a.cfg", "cfg")]);
+    let prepared = prepare(&zip, &source, &target, false, &[], |_| {}).unwrap();
+    let published = prepared.finish(&[], |_| {}).unwrap();
+    assert_eq!(published, target.canonicalize().unwrap());
+    assert_eq!(
+        fs::read_to_string(target.join("mods/a.jar")).unwrap(),
+        "jar"
+    );
+}
+
+#[test]
+fn unicode_destination_created_as_file_after_preview_is_not_replaced() {
+    let (dir, source, zip, _) = setup();
+    let target = dir.path().join("новий-实例");
+    archive(&zip, &[("mods/a.jar", "jar"), ("config/a.cfg", "cfg")]);
+    let prepared = prepare(&zip, &source, &target, false, &[], |_| {}).unwrap();
+    fs::write(&target, "keep").unwrap();
+    assert!(prepared.finish(&[], |_| {}).is_err());
+    assert_eq!(fs::read_to_string(target).unwrap(), "keep");
+}
+
+#[test]
 fn archive_symlinks_and_bad_crc_are_rejected() {
     let (_dir, source, zip, target) = setup();
     let mut writer = ZipWriter::new(fs::File::create(&zip).unwrap());

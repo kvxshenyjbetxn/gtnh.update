@@ -335,6 +335,8 @@ fn stage_folder(pack: &Path, into: &Path, progress: &impl Fn(Progress)) -> Resul
             #[cfg(windows)]
             {
                 let mut permissions = fs::metadata(&target).map_err(error)?.permissions();
+                // This branch is Windows-only; Unix permissions are handled above.
+                #[allow(clippy::permissions_set_readonly_false)]
                 permissions.set_readonly(false);
                 fs::set_permissions(&target, permissions).map_err(error)?;
             }
@@ -560,5 +562,19 @@ fn publish(source: &Path, destination: &Path) -> io::Result<()> {
 }
 #[cfg(windows)]
 fn publish(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::rename(source, destination)
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::MoveFileW;
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // MoveFileW fails if the destination exists, unlike std::fs::rename on Windows.
+    if unsafe { MoveFileW(source.as_ptr(), destination.as_ptr()) } == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }

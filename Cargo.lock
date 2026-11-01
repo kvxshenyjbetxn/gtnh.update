@@ -1526,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "gtnh-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "fs2",
  "reqwest 0.12.28",
@@ -1538,12 +1538,13 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+ "windows-sys 0.61.2",
  "zip",
 ]
 
 [[package]]
 name = "gtnh-updater"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "gtnh-core",
  "serde",

@@ -18,7 +18,7 @@
 
 ## Завантаження й запуск програми
 
-Готові збірки доступні в [GitHub Releases](https://github.com/kvxshenyjbetxn/gtnh.update/releases/latest). Версія цього випуску — **0.1.1**.
+Опубліковані збірки доступні в [GitHub Releases](https://github.com/kvxshenyjbetxn/gtnh.update/releases/latest). Описаний нижче macOS-архів належить випуску **0.1.1**; поточна версія вихідного коду — **0.2.0**.
 
 ### macOS (Apple Silicon, arm64)
 
@@ -28,7 +28,7 @@
 
 Архів призначений для **Apple Silicon**, не для Intel Mac. «Портативна» означає запуск `.app` без інсталятора, а не збереження всіх даних поряд із нею: налаштування й завантаження розміщуються в каталозі конфігурації користувача. Його можна відкрити з налаштувань програми. Поряд із ZIP у релізі є `SHA256SUMS.txt` для перевірки цілісності.
 
-Windows і Linux підтримуються кодом та матрицею CI; цей релізний ZIP містить лише macOS-збірку. Це не означає, що запуск на інших ОС перевірено вручну.
+Релізний ZIP містить лише macOS-збірку; опублікованої Windows-збірки цей опис не обіцяє. Windows x64 можна зібрати локально за інструкцією нижче. Linux підтримується кодом та матрицею CI.
 
 ## Оновлення збірки GTNH
 
@@ -50,7 +50,7 @@ Java не встановлюється, Minecraft/сервер не запуск
 
 Автоматичної перевірки оновлень GTNH та самооновлення програми наразі немає: потрібну збірку GTNH обирають у каталозі, а нову версію GTNH Updater завантажують із GitHub Releases.
 
-Цільові платформи — **macOS, Windows і Linux**. Наразі збірку перевірено на macOS.
+Цільові платформи — **macOS, Windows і Linux**.
 
 ## Розробка й перевірки
 
@@ -78,6 +78,19 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 npm run tauri -- build --bundles app --config '{"bundle":{"active":true,"macOS":{"signingIdentity":"-"}}}'
 ```
 
-Результат: `target/release/bundle/macos/GTNH Updater.app`. Команда застосовує локальний ad-hoc підпис для цілісності пакета; він не замінює Developer ID або нотаризацію Apple. Для інших ОС потрібне відповідне середовище й формат пакування; наведена команда призначена лише для macOS. Правила підвищення й синхронізації версій описано в `AGENTS.md`.
+Результат: `target/release/bundle/macos/GTNH Updater.app`. Команда застосовує локальний ad-hoc підпис для цілісності пакета; він не замінює Developer ID або нотаризацію Apple.
+
+### Локальна Windows-збірка (x64)
+
+На Windows x64 встановіть Node.js 22, Rust для `x86_64-pc-windows-msvc`, C++ Build Tools з Windows SDK та інші [залежності Tauri](https://v2.tauri.app/start/prerequisites/#windows). У корені проєкту виконайте:
+
+```powershell
+npm ci
+npm run build:windows
+```
+
+Результат — `target\x86_64-pc-windows-msvc\release\gtnh-updater.exe`. Це непідписаний виконуваний файл без інсталятора. Для запуску потрібен [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/); Node.js і Rust на комп'ютері користувача не потрібні. Налаштування та завантаження зберігаються в каталозі конфігурації користувача, а не біля `.exe`. Збірка сама по собі не є опублікованим релізом.
+
+Для Linux потрібне відповідне середовище та формат пакування. Правила підвищення й синхронізації версій описано в `AGENTS.md`.
 
 Незалежний проєкт, не офіційний продукт команди GTNH. Перед оновленням зберігайте резервну копію світу.

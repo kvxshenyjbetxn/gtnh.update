@@ -1,13 +1,14 @@
 {
   "name": "gtnh-updater",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri",
+    "build:windows": "tauri build --no-bundle --target x86_64-pc-windows-msvc",
     "test:core": "cargo test -p gtnh-core",
     "test": "node --experimental-strip-types --test tests/*.test.mjs"
   },
