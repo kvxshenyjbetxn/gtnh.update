@@ -16,22 +16,16 @@ async function until(predicate) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 }
-test('unchanged server transfer navigation preserves chosen destination and custom folder name', async () => {
+test('unchanged server navigation keeps the server folder and prepares an in-place update', async () => {
   const ui = await app();
   try {
     await ui.click('▤Сервер'); await review(ui, 'server');
-    ui.fixture.dialogs.push('/my-destination'); await ui.click('Вибрати місце');
-    const input = ui.document.querySelector('.install-name input');
-    input.value = 'My custom instance';
-    input.dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
-    await ui.settle();
     ui.document.querySelector('#server-step-2-heading button').click(); await ui.settle();
     await ui.click('Продовжити →', ui.document.getElementById('server-step-2-content'));
-    assert.equal(ui.document.querySelector('.install-name input').value, 'My custom instance');
-    await ui.click('Підготувати й перевірити');
-    const request = ui.fixture.commands.find(item => item.command === 'prepare_installation').args.request;
-    assert.equal(request.parent, '/my-destination');
-    assert.equal(request.name, 'My custom instance');
+    assert.equal(ui.document.querySelector('.install-name'), null);
+    await ui.click('Підготувати оновлення');
+    const request = ui.fixture.commands.find(item => item.command === 'prepare_server_update').args.request;
+    assert.deepEqual(request, { server: '/server', localPath: '/new.zip', rules: [], mods: [] });
   } finally { await ui.close(); }
 });
 test('expanded section really collapses and reopening retains selection and catalog subscriptions', async () => {

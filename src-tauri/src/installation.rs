@@ -1,6 +1,7 @@
 use gtnh_core::{
     installation::{Decision, Prepared, Preview, Progress},
-    Rule,
+    server_update::{PreparedServerUpdate, ServerPreview},
+    ModRule, RenameRule, Rule,
 };
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Mutex};
@@ -15,13 +16,18 @@ pub(crate) struct Status {
     client: bool,
     progress: Option<Progress>,
     preview: Option<Preview>,
+    server_preview: Option<ServerPreview>,
     destination: Option<String>,
     error: Option<String>,
+}
+enum PreparedJob {
+    Client(Prepared),
+    Server(PreparedServerUpdate),
 }
 #[derive(Default)]
 struct Job {
     status: Status,
-    prepared: Option<Prepared>,
+    prepared: Option<PreparedJob>,
 }
 #[derive(Default)]
 pub(crate) struct InstallStore(Mutex<Job>);
@@ -116,6 +122,10 @@ pub(crate) struct InstallRequest {
     name: String,
     client: bool,
     rules: Vec<Rule>,
+    #[serde(default)]
+    mods: Vec<ModRule>,
+    #[serde(default)]
+    renames: Vec<RenameRule>,
 }
 impl InstallRequest {
     fn key(&self) -> Result<String, String> {
@@ -149,6 +159,9 @@ pub(crate) fn prepare_installation(
     downloads: State<'_, crate::downloads::DownloadStore>,
     request: InstallRequest,
 ) -> Result<(), String> {
+    if !request.client {
+        return Err("Server updates use prepare_server_update".into());
+    }
     if !gtnh_core::validate_rule_path(&request.name) || request.name.contains('/') {
         return Err("Invalid destination folder name".into());
     }
@@ -169,6 +182,8 @@ pub(crate) fn prepare_installation(
             &destination,
             request.client,
             &request.rules,
+            &request.mods,
+            &request.renames,
             |p| app.state::<InstallStore>().progress(p),
         );
         match result {
@@ -177,7 +192,81 @@ pub(crate) fn prepare_installation(
                     job.status.phase = "preview".into();
                     job.status.preview = Some(prepared.preview().clone());
                     job.status.revision += 1;
-                    job.prepared = Some(prepared);
+                    job.prepared = Some(PreparedJob::Client(prepared));
+                }
+            }
+            Err(error) => app.state::<InstallStore>().fail(error),
+        }
+    });
+    Ok(())
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ServerUpdateRequest {
+    url: Option<String>,
+    local_path: Option<PathBuf>,
+    server: String,
+    #[serde(default)]
+    rules: Vec<Rule>,
+    #[serde(default)]
+    mods: Vec<ModRule>,
+}
+impl ServerUpdateRequest {
+    fn key(&self) -> Result<String, String> {
+        match (&self.url, &self.local_path) {
+            (Some(url), None) => {
+                let official = gtnh_core::downloads::validate_url(url)?;
+                if !official.path().starts_with("/ServerPacks/") {
+                    return Err("Archive type does not match server update".into());
+                }
+                Ok(url.clone())
+            }
+            (None, Some(path)) => Ok(path.to_string_lossy().into_owned()),
+            _ => Err("Choose exactly one downloaded archive or local pack".into()),
+        }
+    }
+    fn resolve(&self, downloads: &crate::downloads::DownloadStore) -> Result<PathBuf, String> {
+        self.key()?;
+        if let Some(url) = &self.url {
+            downloads.completed_path(url)
+        } else {
+            gtnh_core::pack_selection::validate(
+                self.local_path.as_deref().ok_or("Missing local pack")?,
+            )
+        }
+    }
+}
+#[tauri::command]
+pub(crate) fn prepare_server_update(
+    app: tauri::AppHandle,
+    store: State<'_, InstallStore>,
+    downloads: State<'_, crate::downloads::DownloadStore>,
+    request: ServerUpdateRequest,
+) -> Result<(), String> {
+    let key = request.key()?;
+    store.begin(key, false)?;
+    let pack = match request.resolve(&downloads) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            store.fail(error.clone());
+            return Err(error);
+        }
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = gtnh_core::server_update::prepare(
+            &pack,
+            std::path::Path::new(&request.server),
+            &request.rules,
+            &request.mods,
+            |p| app.state::<InstallStore>().progress(p),
+        );
+        match result {
+            Ok(prepared) => {
+                if let Ok(mut job) = app.state::<InstallStore>().0.lock() {
+                    job.status.phase = "preview".into();
+                    job.status.server_preview = Some(prepared.preview().clone());
+                    job.status.revision += 1;
+                    job.prepared = Some(PreparedJob::Server(prepared));
                 }
             }
             Err(error) => app.state::<InstallStore>().fail(error),
@@ -202,7 +291,11 @@ pub(crate) fn finish_installation(
         prepared
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let result = prepared.finish(&decisions, |p| app.state::<InstallStore>().progress(p));
+        let progress = |p| app.state::<InstallStore>().progress(p);
+        let result = match prepared {
+            PreparedJob::Client(prepared) => prepared.finish(&decisions, progress),
+            PreparedJob::Server(prepared) => prepared.finish(&decisions, progress),
+        };
         match result {
             Ok(destination) => {
                 if let Ok(mut job) = app.state::<InstallStore>().0.lock() {
@@ -244,6 +337,8 @@ mod tests {
             name: "new".into(),
             client: false,
             rules: vec![],
+            mods: vec![],
+            renames: vec![],
         };
         assert!(request.key().is_ok());
         let path = request
@@ -254,6 +349,26 @@ mod tests {
         request.url = Some("https://downloads.gtnewhorizons.com/ServerPacks/pack.zip".into());
         assert!(request.key().is_err());
         std::fs::remove_file(&local).unwrap();
+    }
+    #[test]
+    fn server_request_requires_server_pack_and_one_source() {
+        let mut request = ServerUpdateRequest {
+            url: Some("https://downloads.gtnewhorizons.com/ServerPacks/pack.zip".into()),
+            local_path: None,
+            server: String::new(),
+            rules: vec![],
+            mods: vec![],
+        };
+        assert!(request.key().is_ok());
+        request.url =
+            Some("https://downloads.gtnewhorizons.com/Multi_mc_downloads/pack.zip".into());
+        assert!(request.key().is_err());
+        request.local_path = Some(PathBuf::from("pack.zip"));
+        assert!(request.key().is_err());
+        request.url = None;
+        assert!(request.key().is_ok());
+        request.local_path = None;
+        assert!(request.key().is_err());
     }
     #[test]
     fn active_install_pins_only_its_archive_and_blocks_a_second_install() {

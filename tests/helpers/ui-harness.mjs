@@ -26,11 +26,12 @@ async function compiledApp() {
   })();
   return bundle;
 }
-export const settings = () => ({ schemaVersion: 1, language: 'uk', theme: 'amoled', includePrereleases: false, clientSource: '/old', serverSource: '/server', prismInstancesDirectory: '/instances', clientRules: [{ path: 'saves', enabled: true, conflict: 'replace', custom: false }], serverRules: [{ path: 'config/JourneyMapServer', enabled: true, conflict: 'replace', custom: false }] });
-export function idle(revision = 0) { return { revision, phase: '', url: '', client: true, progress: null, preview: null, destination: null, error: null }; }
+export const settings = () => ({ schemaVersion: 1, language: 'uk', theme: 'amoled', includePrereleases: false, clientSource: '/old', serverSource: '/server', prismInstancesDirectory: '/instances', clientRules: [{ path: 'saves', enabled: true, conflict: 'replace', custom: false }], serverRules: [], clientMods: [], serverMods: [], clientRenames: [] });
+export const emptyPlan = () => ({ removed: [], added: [], duplicates: [] });
+export function idle(revision = 0) { return { revision, phase: '', url: '', client: true, progress: null, preview: null, serverPreview: null, destination: null, error: null }; }
 export async function app(options = {}) {
   const fixture = {
-    settings: settings(), status: idle(), commands: [], dialogs: [], listeners: new Set(), releases: [], downloads: [],
+    settings: settings(), status: idle(), commands: [], dialogs: [], clientPlan: emptyPlan(), serverPreview: { server: '/server', backup: '/server.gtnh-backup', previousBackup: true, replaced: [{ path: 'mods', directory: true, old: true, new: true }, { path: 'oldlauncher.jar', directory: false, old: true, new: false }, { path: 'startserver.sh', directory: false, old: false, new: true }], added: ['lwjgl3ify-forgePatches.jar'], journeyMap: true, scripts: [{ path: 'startserver.sh', old: 'java -Xmx4G', new: 'java -Xmx6G' }, { path: 'java9args.txt', old: 'old args', new: null }], javaChange: 'toJava17', recovered: 'rolledBack', mods: emptyPlan(), files: [], missing: [] }, inspected: {}, listeners: new Set(), releases: [], downloads: [],
     async open(opts) { this.commands.push({ command: 'open', args: opts }); return this.dialogs.shift() ?? null; },
     async invoke(command, args) {
       this.commands.push({ command, args: structuredClone(args) });
@@ -44,9 +45,15 @@ export async function app(options = {}) {
         case 'list_releases': return this.releases;
         case 'download_status': return this.downloads;
         case 'installation_status': return args?.since === this.status.revision ? null : structuredClone(this.status);
-        case 'prepare_installation': this.status = { ...idle(this.status.revision + 1), phase: 'preview', client: args.request.client, preview: { destination: '/instances/new', files: [], missing: [] } }; return;
+        case 'prepare_installation': this.status = { ...idle(this.status.revision + 1), phase: 'preview', client: args.request.client, preview: { destination: '/instances/new', files: [], missing: [], mods: structuredClone(this.clientPlan), renames: structuredClone(this.clientRenamePreview ?? []) } }; return;
+        case 'prepare_server_update': this.status = { ...idle(this.status.revision + 1), phase: 'preview', client: false, serverPreview: structuredClone(this.serverPreview) }; return;
+        case 'inspect_mod': {
+          if (this.inspected[args.path] === null) throw new Error('not a mod');
+          const stem = args.path.split('/').pop().replace(/\.jar$/, '').replace(/-[\d.]+$/, '');
+          return this.inspected[args.path] ?? { name: stem, modIds: [stem.toLowerCase()], stem, file: args.path };
+        }
         case 'cancel_installation': this.status = idle(this.status.revision + 1); return;
-        case 'finish_installation': this.status = { ...idle(this.status.revision + 1), phase: 'completed', destination: '/instances/new' }; return;
+        case 'finish_installation': this.status = { ...idle(this.status.revision + 1), phase: 'completed', client: this.status.client, serverPreview: this.status.serverPreview, destination: this.status.client ? '/instances/new' : '/server' }; return;
         default: throw new Error(`Unexpected command: ${command}`);
       }
     }, ...options,

@@ -7,6 +7,9 @@
   import Installation from './Installation.svelte';
   import UpdateSection from './UpdateSection.svelte';
   import TransferRules from './TransferRules.svelte';
+  import ModRules from './ModRules.svelte';
+  import RenameRules from './RenameRules.svelte';
+  import { renamesValid } from './rename-rules';
   import { packName, type InstallRequest, type InstallStatus } from './installation';
   import { chooseLocalPack, resolvePrismDirectory } from './pack-dialog';
   import { buildInstallRequest, createDraft, transitionDraft, type DraftAction, type UpdateStep } from './update-flow';
@@ -16,7 +19,7 @@
   type Mode = 'client' | 'server';
   const modes: Mode[] = ['client', 'server'];
   const desktop = isTauri();
-  let settings = $state<Settings>({ schemaVersion: 1, language: 'uk', theme: 'amoled', includePrereleases: false, clientSource: null, serverSource: null, prismInstancesDirectory: null, clientRules: [], serverRules: [] });
+  let settings = $state<Settings>({ schemaVersion: 1, language: 'uk', theme: 'amoled', includePrereleases: false, clientSource: null, serverSource: null, prismInstancesDirectory: null, clientRules: [], serverRules: [], clientMods: [], serverMods: [], clientRenames: [] });
   let drafts = $state({ client: createDraft(null), server: createDraft(null) });
   let expandedStep = $state<Record<Mode, UpdateStep | null>>({ client: 0, server: 0 });
   let tab = $state<Mode | 'settings'>('client');
@@ -52,6 +55,8 @@
   $effect(() => {
     if (!loaded) return;
     const snapshot = JSON.stringify(settings);
+    // Rows with an invalid new name are shown inline; they are saved once corrected.
+    if (!renamesValid(settings.clientRenames)) return;
     if (snapshot !== attemptedSnapshot) {
       attemptedSnapshot = snapshot;
       pendingSnapshot = snapshot;
@@ -143,7 +148,7 @@
         try { initial = await prismParent() ?? undefined; }
         catch (e) { initial = undefined; error = `${t.prismUnavailable}\n${String(e)}`; }
       }
-      const path = await open({ directory: true, multiple: false, title: t.oldBuild, defaultPath: initial });
+      const path = await open({ directory: true, multiple: false, title: mode === 'client' ? t.oldBuild : t.serverFolder, defaultPath: initial });
       if (!path || Array.isArray(path)) return;
       const root = await invoke<string>('source_directory', { path, client: mode === 'client' });
       drafts[mode] = transitionDraft(drafts[mode], { kind: 'source', source: root }, false);
@@ -198,7 +203,8 @@
     await continueDraft(currentMode);
   }
   function setRequest(mode: Mode) {
-    installRequest = buildInstallRequest(drafts[mode], mode === 'client', mode === 'client' ? settings.clientRules : settings.serverRules);
+    installRequest = buildInstallRequest(drafts[mode], mode === 'client',
+      mode === 'client' ? settings.clientRules : settings.serverRules, mode === 'client' ? settings.clientMods : settings.serverMods, mode === 'client' ? settings.clientRenames : []);
   }
   function rulesChanged(mode: Mode) {
     if (installBusy) return;
@@ -218,6 +224,12 @@
     }
     tab = next; if (next !== 'settings') lastMode = next;
     notice = '';
+  }
+  const rulesOf = (mode: Mode) => mode === 'client' ? settings.clientRules : settings.serverRules;
+  const modsOf = (mode: Mode) => mode === 'client' ? settings.clientMods : settings.serverMods;
+  function transferSummary(mode: Mode) {
+    const counts = `${t.enabledRules}: ${rulesOf(mode).filter(rule => rule.enabled).length} · ${t.modsEnabled}: ${modsOf(mode).filter(mod => mod.enabled).length}`;
+    return mode === 'client' ? counts : `${t.serverStepSummary} · ${counts}`;
   }
   function packSummary(mode: Mode) {
     const pack = drafts[mode].pack;
@@ -248,7 +260,7 @@
     {#if saveError}<div class="error" role="alert"><strong>{t.error}</strong><pre>{saveError}</pre></div>{/if}
     {#if tab === 'settings' && (installBusy || installStatus?.phase)}
       <div class={installStatus?.phase === 'failed' ? 'error' : 'notice'} role={installStatus?.phase === 'failed' ? 'alert' : 'status'}>
-        <strong>{installBusy ? t.installInProgress : installStatus?.phase === 'completed' ? t.installComplete : t.installFailed}</strong>
+        <strong>{installBusy ? t.installInProgress : installStatus?.phase === 'completed' ? (installStatus.client ? t.installComplete : t.serverUpdated) : installStatus?.client === false ? t.serverUpdatedFailed : t.installFailed}</strong>
         {#if installStatus?.progress && installBusy}
           <p>{t[installStatus.progress.stage]} · {installStatus.progress.done} / {installStatus.progress.total}</p>
           <progress aria-label={t.installProgress} max={installStatus.progress.total || undefined} value={installStatus.progress.total ? installStatus.progress.done : undefined}></progress>
@@ -262,7 +274,8 @@
     {#if loaded}
       {#each modes as mode}
         <div hidden={tab !== mode} class="update-flow">
-          <UpdateSection id={`${mode}-step-0`} number={1} title={t.oldBuild} summary={drafts[mode].source || t.selectFirst} expanded={expandedStep[mode] === 0} locked={locked} onToggle={() => openStep(mode, 0)}>
+          <UpdateSection id={`${mode}-step-0`} number={1} title={mode === 'client' ? t.oldBuild : t.serverFolder} summary={drafts[mode].source || t.selectFirst} expanded={expandedStep[mode] === 0} locked={locked} onToggle={() => openStep(mode, 0)}>
+            {#if mode === 'server'}<p class="muted">{t.serverFolderHint}</p>{/if}
             {#if drafts[mode].source}<code class="directory">{drafts[mode].source}</code>{/if}
             <button class="secondary" disabled={locked || !desktop} onclick={() => pickSource(mode)}>{t.selectSource}…</button>
             <div class="step-actions"><button class="primary" disabled={locked || !drafts[mode].source} onclick={() => continueDraft(mode)}>{t.continue} →</button></div>
@@ -279,17 +292,21 @@
             {#if drafts[mode].pack}<code class="directory">{drafts[mode].pack?.localPath ?? drafts[mode].pack?.url}</code>{/if}
             <div class="step-actions"><button class="primary" disabled={locked || !drafts[mode].pack} onclick={() => continueDraft(mode)}>{t.continue} →</button></div>
           </UpdateSection>
-          <UpdateSection id={`${mode}-step-2`} number={3} title={t.whatToTransfer} summary={`${t.enabledRules}: ${(mode === 'client' ? settings.clientRules : settings.serverRules).filter(rule => rule.enabled).length}`} expanded={expandedStep[mode] === 2} locked={locked || drafts[mode].completed < 2} lockedReason={drafts[mode].completed < 2 ? t.completePrevious : ''} onToggle={() => openStep(mode, 2)}>
+          <UpdateSection id={`${mode}-step-2`} number={3} title={mode === 'client' ? t.whatToTransfer : t.serverChanges} summary={transferSummary(mode)} expanded={expandedStep[mode] === 2} locked={locked || drafts[mode].completed < 2} lockedReason={drafts[mode].completed < 2 ? t.completePrevious : ''} onToggle={() => openStep(mode, 2)}>
             {#if mode === 'client'}<TransferRules bind:rules={settings.clientRules} source={drafts[mode].source || ''} language={settings.language} disabled={locked} {desktop} onChange={() => rulesChanged(mode)} bind:picking />
-            {:else}<TransferRules bind:rules={settings.serverRules} source={drafts[mode].source || ''} language={settings.language} disabled={locked} {desktop} onChange={() => rulesChanged(mode)} bind:picking />{/if}
+              <div class="rules-block"><ModRules bind:mods={settings.clientMods} modsDirectory={drafts[mode].source ? `${drafts[mode].source}/mods` : ''} language={settings.language} disabled={locked} {desktop} onChange={() => rulesChanged(mode)} bind:picking /></div>
+              <div class="rules-block"><RenameRules bind:rules={settings.clientRenames} source={drafts[mode].source || ''} language={settings.language} disabled={locked} {desktop} onChange={() => rulesChanged(mode)} bind:picking /></div>
+            {:else}<ul class="server-info"><li>{t.serverReplacedInfo}</li><li>{t.serverKeptInfo}</li><li>{t.serverJourneyInfo}</li><li>{t.serverConfigInfo}</li><li>{t.serverModsInfo}</li></ul>
+              <div class="rules-block"><TransferRules server bind:rules={settings.serverRules} source={drafts[mode].source || ''} language={settings.language} disabled={locked} {desktop} onChange={() => rulesChanged(mode)} bind:picking /></div>
+              <div class="rules-block"><ModRules bind:mods={settings.serverMods} modsDirectory={drafts[mode].source ? `${drafts[mode].source}/mods` : ''} language={settings.language} disabled={locked} {desktop} onChange={() => rulesChanged(mode)} bind:picking /></div>{/if}
             <div class="step-actions"><button class="primary" disabled={locked || !drafts[mode].pack} onclick={() => continueDraft(mode)}>{t.continue} →</button></div>
           </UpdateSection>
         </div>
       {/each}
     {/if}
     <div hidden={tab === 'settings' || !loaded}>
-      <UpdateSection id={`${currentMode}-step-3`} number={4} title={t.reviewInstall} summary={installBusy ? t.installInProgress : t.reviewHint} expanded={expandedStep[currentMode] === 3} locked={locked || drafts[currentMode].completed < 3} lockedReason={drafts[currentMode].completed < 3 ? t.completePrevious : ''} onToggle={() => openStep(currentMode, 3)}>
-        <dl class="review-summary"><div><dt>{t.installSource}</dt><dd>{drafts[currentMode].source || '—'}</dd></div><div><dt>{t.newBuild}</dt><dd>{packSummary(currentMode)}</dd></div><div><dt>{t.enabledRules}</dt><dd>{(currentMode === 'client' ? settings.clientRules : settings.serverRules).filter(rule => rule.enabled).length}</dd></div></dl>
+      <UpdateSection id={`${currentMode}-step-3`} number={4} title={t.reviewInstall} summary={installBusy ? t.installInProgress : currentMode === 'client' ? t.reviewHint : t.serverReviewHint} expanded={expandedStep[currentMode] === 3} locked={locked || drafts[currentMode].completed < 3} lockedReason={drafts[currentMode].completed < 3 ? t.completePrevious : ''} onToggle={() => openStep(currentMode, 3)}>
+        <dl class="review-summary"><div><dt>{currentMode === 'client' ? t.installSource : t.serverFolder}</dt><dd>{drafts[currentMode].source || '—'}</dd></div><div><dt>{t.newBuild}</dt><dd>{packSummary(currentMode)}</dd></div><div><dt>{t.enabledRules}</dt><dd>{rulesOf(currentMode).filter(rule => rule.enabled).length}</dd></div><div><dt>{t.modsEnabled}</dt><dd>{modsOf(currentMode).filter(mod => mod.enabled).length}</dd></div></dl>
         <Installation language={settings.language} {desktop} bind:request={installRequest} bind:busy={installBusy} defaultParent={settings.prismInstancesDirectory === savedPrism ? defaultParent : null} onStatus={status => { installStatus = status; }} onSettings={() => switchTab('settings')} />
         {#if !installRequest && !installBusy && drafts[currentMode].completed === 3 && installStatus?.phase !== 'completed'}<button class="primary" disabled={locked} onclick={() => { void continueFromReview(); }}>{t.retryPreparation}</button>{/if}
       </UpdateSection>

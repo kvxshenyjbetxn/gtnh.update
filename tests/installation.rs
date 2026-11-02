@@ -1,6 +1,6 @@
 use gtnh_core::{
     installation::{prepare, Decision},
-    Conflict, Rule,
+    Conflict, ModAction, ModRule, RenameRule, Rule,
 };
 use std::{fs, io::Write, path::Path};
 use zip::{write::SimpleFileOptions, ZipWriter};
@@ -68,6 +68,8 @@ fn selected_custom_folders_transfer_empty_directories_and_nested_contents_in_pri
                 rule("hui", Conflict::Replace),
                 rule("custom folder", Conflict::Replace),
             ],
+            &[],
+            &[],
             |_| {},
         )
         .unwrap();
@@ -126,6 +128,8 @@ fn local_folder_is_staged_and_left_unchanged_after_transfer() {
             &target,
             client,
             &[rule("options.txt", Conflict::Replace)],
+            &[],
+            &[],
             |_| {},
         )
         .unwrap()
@@ -198,6 +202,8 @@ fn client_metadata_preserves_playtime_and_sets_display_name_without_replacing_ne
                         &target,
                         true,
                         &[],
+                        &[],
+                        &[],
                         |_| {},
                     )
                     .unwrap()
@@ -252,7 +258,7 @@ fn client_metadata_missing_invalid_and_unrelated_statistics_do_not_replace_pack_
             fs::write(instance.join("instance.cfg"), contents).unwrap();
         }
         archive(&zip, &[("instance.cfg", "[General]\nConfigVersion=1.3\nname=Default\ntotalTimePlayed=5\nlastTimePlayed=6\nlastLaunchTime=7\n"), ("mmc-pack.json", "{}")]);
-        prepare(&zip, &source, &target, true, &[], |_| {})
+        prepare(&zip, &source, &target, true, &[], &[], &[], |_| {})
             .unwrap()
             .finish(&[], |_| {})
             .unwrap();
@@ -298,7 +304,7 @@ fn client_display_names_are_encoded_for_qt_and_legacy_prism_without_adding_dupli
         let config = format!("{header}InstanceType=OneSix\nname=Default\nname=Duplicate");
         archive(&zip, &[("instance.cfg", &config), ("mmc-pack.json", "{}")]);
         let target = dir.path().join(name);
-        prepare(&zip, &source, &target, true, &[], |_| {})
+        prepare(&zip, &source, &target, true, &[], &[], &[], |_| {})
             .unwrap()
             .finish(&[], |_| {})
             .unwrap();
@@ -334,7 +340,7 @@ fn unversioned_grouped_destination_is_rejected_instead_of_publishing_a_wrong_pri
             ("mmc-pack.json", "{}"),
         ],
     );
-    let result = prepare(&zip, &source, &target, true, &[], |_| {});
+    let result = prepare(&zip, &source, &target, true, &[], &[], &[], |_| {});
     assert!(
         result.is_err(),
         "legacy Prism ignores groups and would keep the last name"
@@ -365,7 +371,7 @@ fn unversioned_grouped_source_does_not_import_ambiguous_statistics() {
             ("mmc-pack.json", "{}"),
         ],
     );
-    prepare(&zip, &source, &target, true, &[], |_| {})
+    prepare(&zip, &source, &target, true, &[], &[], &[], |_| {})
         .unwrap()
         .finish(&[], |_| {})
         .unwrap();
@@ -389,7 +395,7 @@ fn qt_general_section_aliases_preserve_playtime_name_and_unrelated_groups() {
             "{section}\nConfigVersion=1.3\nname=Default\n[%General]\nname=Real group untouched\n"
         );
         archive(&zip, &[("instance.cfg", &config), ("mmc-pack.json", "{}")]);
-        prepare(&zip, &source, &target, true, &[], |_| {})
+        prepare(&zip, &source, &target, true, &[], &[], &[], |_| {})
             .unwrap()
             .finish(&[], |_| {})
             .unwrap();
@@ -409,7 +415,7 @@ fn server_instance_cfg_is_not_modified() {
             ("instance.cfg", config),
         ],
     );
-    prepare(&zip, &source, &target, false, &[], |_| {})
+    prepare(&zip, &source, &target, false, &[], &[], &[], |_| {})
         .unwrap()
         .finish(&[], |_| {})
         .unwrap();
@@ -445,7 +451,7 @@ fn client_metadata_does_not_follow_old_metadata_symlinks_or_unrecognized_parent(
                 ("mmc-pack.json", "{}"),
             ],
         );
-        prepare(&zip, &source, &target, true, &[], |_| {})
+        prepare(&zip, &source, &target, true, &[], &[], &[], |_| {})
             .unwrap()
             .finish(&[], |_| {})
             .unwrap();
@@ -465,8 +471,18 @@ fn local_pack_cannot_contain_destination_or_be_overwritten() {
     let pack = dir.path().join("downloaded-pack");
     fs::create_dir_all(pack.join("mods")).unwrap();
     fs::create_dir(pack.join("config")).unwrap();
-    assert!(prepare(&pack, &source, &pack.join("result"), false, &[], |_| {}).is_err());
-    assert!(prepare(&pack, &source, &pack, false, &[], |_| {}).is_err());
+    assert!(prepare(
+        &pack,
+        &source,
+        &pack.join("result"),
+        false,
+        &[],
+        &[],
+        &[],
+        |_| {}
+    )
+    .is_err());
+    assert!(prepare(&pack, &source, &pack, false, &[], &[], &[], |_| {}).is_err());
     assert_eq!(fs::read_dir(&pack).unwrap().count(), 2);
 }
 
@@ -479,7 +495,7 @@ fn local_folder_rejects_symlinks_without_following_or_altering_them() {
     fs::create_dir(pack.join("config")).unwrap();
     fs::write(dir.path().join("outside"), "secret").unwrap();
     std::os::unix::fs::symlink(dir.path().join("outside"), pack.join("mods/link.jar")).unwrap();
-    assert!(prepare(&pack, &source, &target, false, &[], |_| {}).is_err());
+    assert!(prepare(&pack, &source, &target, false, &[], &[], &[], |_| {}).is_err());
     assert!(!target.exists());
     assert_eq!(
         fs::read_to_string(dir.path().join("outside")).unwrap(),
@@ -515,6 +531,8 @@ fn server_merges_selected_files_and_keeps_new_defaults() {
             rule("config", Conflict::Replace),
             rule("absent", Conflict::Replace),
         ],
+        &[],
+        &[],
         |_| {},
     )
     .unwrap();
@@ -579,6 +597,8 @@ fn client_uses_instance_root_and_minecraft_directory() {
             &target,
             true,
             &[rule("options.txt", Conflict::Replace)],
+            &[],
+            &[],
             |_| {},
         )
         .unwrap()
@@ -599,10 +619,10 @@ fn ask_requires_explicit_decision_and_keep_preserves_new() {
     fs::create_dir(source.join("config")).unwrap();
     fs::write(source.join("config/user.cfg"), "old").unwrap();
     let rules = [rule("config/user.cfg", Conflict::Ask)];
-    let prepared = prepare(&zip, &source, &target, false, &rules, |_| {}).unwrap();
+    let prepared = prepare(&zip, &source, &target, false, &rules, &[], &[], |_| {}).unwrap();
     assert!(prepared.finish(&[], |_| {}).is_err());
     assert!(!target.exists());
-    prepare(&zip, &source, &target, false, &rules, |_| {})
+    prepare(&zip, &source, &target, false, &rules, &[], &[], |_| {})
         .unwrap()
         .finish(
             &[Decision {
@@ -638,7 +658,7 @@ fn unsafe_archives_never_publish_or_modify_source() {
             ],
         );
         assert!(
-            prepare(&zip, &source, &target, false, &[], |_| {}).is_err(),
+            prepare(&zip, &source, &target, false, &[], &[], &[], |_| {}).is_err(),
             "{path}"
         );
         assert!(!target.exists());
@@ -660,7 +680,7 @@ fn file_case_aliases_and_file_directory_collisions_are_rejected() {
     ] {
         let (_dir, source, zip, target) = setup();
         archive(&zip, &files);
-        assert!(prepare(&zip, &source, &target, false, &[], |_| {}).is_err());
+        assert!(prepare(&zip, &source, &target, false, &[], &[], &[], |_| {}).is_err());
         assert!(!target.exists());
     }
 }
@@ -684,7 +704,7 @@ fn directories_differing_only_by_case_are_installed() {
             ("config/Thaumcraft[Thaumcraft]/lang/fr_FR.lang", "fr"),
         ],
     );
-    prepare(&zip, &source, &target, false, &[], |_| {})
+    prepare(&zip, &source, &target, false, &[], &[], &[], |_| {})
         .unwrap()
         .finish(&[], |_| {})
         .unwrap();
@@ -714,6 +734,8 @@ fn transfer_into_differently_cased_directory_is_allowed() {
         &target,
         false,
         &[rule("config/mod[mod]", Conflict::Replace)],
+        &[],
+        &[],
         |_| {},
     )
     .unwrap()
@@ -736,6 +758,8 @@ fn transferred_file_differing_only_by_case_from_pack_file_is_rejected() {
         &target,
         false,
         &[rule("config/A.cfg", Conflict::Replace)],
+        &[],
+        &[],
         |_| {}
     )
     .is_err());
@@ -746,12 +770,22 @@ fn transferred_file_differing_only_by_case_from_pack_file_is_rejected() {
 fn existing_nested_and_replaced_destinations_are_protected() {
     let (_dir, source, zip, target) = setup();
     archive(&zip, &[("mods/a.jar", "jar"), ("config/a.cfg", "cfg")]);
-    assert!(prepare(&zip, &source, &source.join("new"), false, &[], |_| {}).is_err());
+    assert!(prepare(
+        &zip,
+        &source,
+        &source.join("new"),
+        false,
+        &[],
+        &[],
+        &[],
+        |_| {}
+    )
+    .is_err());
     fs::create_dir(&target).unwrap();
     fs::write(target.join("sentinel"), "safe").unwrap();
-    assert!(prepare(&zip, &source, &target, false, &[], |_| {}).is_err());
+    assert!(prepare(&zip, &source, &target, false, &[], &[], &[], |_| {}).is_err());
     fs::remove_dir_all(&target).unwrap();
-    let prepared = prepare(&zip, &source, &target, false, &[], |_| {}).unwrap();
+    let prepared = prepare(&zip, &source, &target, false, &[], &[], &[], |_| {}).unwrap();
     fs::create_dir(&target).unwrap();
     fs::write(target.join("sentinel"), "safe").unwrap();
     assert!(prepared.finish(&[], |_| {}).is_err());
@@ -769,7 +803,7 @@ fn staged_client_is_not_visible_as_an_instance_before_confirmation() {
             (".minecraft/mods/a.jar", "jar"),
         ],
     );
-    let prepared = prepare(&zip, &source, &target, true, &[], |_| {}).unwrap();
+    let prepared = prepare(&zip, &source, &target, true, &[], &[], &[], |_| {}).unwrap();
     for entry in fs::read_dir(dir.path()).unwrap() {
         assert!(!entry.unwrap().path().join("instance.cfg").exists());
     }
@@ -803,6 +837,8 @@ fn source_to_pack_type_conflicts_are_refused_without_mutating_source() {
             &target,
             false,
             &[rule(relative, Conflict::Replace)],
+            &[],
+            &[],
             |_| {}
         )
         .is_err());
@@ -820,7 +856,7 @@ fn source_to_pack_type_conflicts_are_refused_without_mutating_source() {
 fn an_empty_destination_created_after_preview_is_never_replaced() {
     let (_dir, source, zip, target) = setup();
     archive(&zip, &[("mods/a.jar", "jar"), ("config/a.cfg", "cfg")]);
-    let prepared = prepare(&zip, &source, &target, false, &[], |_| {}).unwrap();
+    let prepared = prepare(&zip, &source, &target, false, &[], &[], &[], |_| {}).unwrap();
     fs::create_dir(&target).unwrap();
     assert!(prepared.finish(&[], |_| {}).is_err());
     assert!(target.is_dir());
@@ -832,7 +868,7 @@ fn unicode_destination_is_published() {
     let (dir, source, zip, _) = setup();
     let target = dir.path().join("новий-实例");
     archive(&zip, &[("mods/a.jar", "jar"), ("config/a.cfg", "cfg")]);
-    let prepared = prepare(&zip, &source, &target, false, &[], |_| {}).unwrap();
+    let prepared = prepare(&zip, &source, &target, false, &[], &[], &[], |_| {}).unwrap();
     let published = prepared.finish(&[], |_| {}).unwrap();
     assert_eq!(published, target.canonicalize().unwrap());
     assert_eq!(
@@ -846,7 +882,7 @@ fn unicode_destination_created_as_file_after_preview_is_not_replaced() {
     let (dir, source, zip, _) = setup();
     let target = dir.path().join("новий-实例");
     archive(&zip, &[("mods/a.jar", "jar"), ("config/a.cfg", "cfg")]);
-    let prepared = prepare(&zip, &source, &target, false, &[], |_| {}).unwrap();
+    let prepared = prepare(&zip, &source, &target, false, &[], &[], &[], |_| {}).unwrap();
     fs::write(&target, "keep").unwrap();
     assert!(prepared.finish(&[], |_| {}).is_err());
     assert_eq!(fs::read_to_string(target).unwrap(), "keep");
@@ -860,7 +896,7 @@ fn archive_symlinks_and_bad_crc_are_rejected() {
         .add_symlink("config/link", "../../outside", SimpleFileOptions::default())
         .unwrap();
     writer.finish().unwrap();
-    assert!(prepare(&zip, &source, &target, false, &[], |_| {}).is_err());
+    assert!(prepare(&zip, &source, &target, false, &[], &[], &[], |_| {}).is_err());
     archive(
         &zip,
         &[
@@ -879,7 +915,7 @@ fn archive_symlinks_and_bad_crc_are_rejected() {
     } else {
         panic!("Expected stored fixture payload");
     }
-    assert!(prepare(&zip, &source, &target, false, &[], |_| {}).is_err());
+    assert!(prepare(&zip, &source, &target, false, &[], &[], &[], |_| {}).is_err());
     assert!(!target.exists());
 }
 
@@ -902,7 +938,7 @@ fn duplicate_exact_zip_names_are_rejected_before_extraction() {
         }
     }
     fs::write(&zip, bytes).unwrap();
-    assert!(prepare(&zip, &source, &target, false, &[], |_| {}).is_err());
+    assert!(prepare(&zip, &source, &target, false, &[], &[], &[], |_| {}).is_err());
     assert!(!target.exists());
 }
 
@@ -931,6 +967,8 @@ fn disk_budget_excludes_kept_files_and_defers_ask_until_decided() {
             rule("config/ask", Conflict::Ask),
             rule("new-file", Conflict::Keep),
         ],
+        &[],
+        &[],
         |_| {},
     )
     .unwrap();
@@ -980,6 +1018,8 @@ fn most_specific_rule_controls_overlapping_file_conflicts() {
             rule("config/a.cfg", Conflict::Keep),
             rule("config", Conflict::Replace),
         ],
+        &[],
+        &[],
         |_| {},
     )
     .unwrap()
@@ -1000,7 +1040,7 @@ fn dropping_preparation_cleans_staging_and_retains_archive() {
     let (dir, source, zip, target) = setup();
     archive(&zip, &[("mods/a.jar", "jar"), ("config/a.cfg", "cfg")]);
     let before = fs::read_dir(dir.path()).unwrap().count();
-    drop(prepare(&zip, &source, &target, false, &[], |_| {}).unwrap());
+    drop(prepare(&zip, &source, &target, false, &[], &[], &[], |_| {}).unwrap());
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), before);
     assert!(!target.exists());
     assert!(zip.exists());
@@ -1015,10 +1055,10 @@ fn source_symlinks_and_symlink_swap_after_preview_are_rejected() {
     fs::write(dir.path().join("secret"), "secret").unwrap();
     symlink(dir.path().join("secret"), source.join("options.txt")).unwrap();
     let rules = [rule("options.txt", Conflict::Replace)];
-    assert!(prepare(&zip, &source, &target, false, &rules, |_| {}).is_err());
+    assert!(prepare(&zip, &source, &target, false, &rules, &[], &[], |_| {}).is_err());
     fs::remove_file(source.join("options.txt")).unwrap();
     fs::write(source.join("options.txt"), "mine").unwrap();
-    let prepared = prepare(&zip, &source, &target, false, &rules, |_| {}).unwrap();
+    let prepared = prepare(&zip, &source, &target, false, &rules, &[], &[], |_| {}).unwrap();
     fs::remove_file(source.join("options.txt")).unwrap();
     symlink(dir.path().join("secret"), source.join("options.txt")).unwrap();
     assert!(prepared.finish(&[], |_| {}).is_err());
@@ -1072,6 +1112,241 @@ fn prepare_cleans_stale_staging_next_to_the_destination() {
     let stale = dir.path().join(".gtnh-install-old123");
     fs::create_dir(&stale).unwrap();
     archive(&zip, &[("mods/a.jar", "jar"), ("config/a.cfg", "cfg")]);
-    let _prepared = prepare(&zip, &source, &target, false, &[], |_| {}).unwrap();
+    let _prepared = prepare(&zip, &source, &target, false, &[], &[], &[], |_| {}).unwrap();
     assert!(!stale.exists());
+}
+
+fn jar(path: &Path, mcmod: Option<&str>) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut zip = ZipWriter::new(fs::File::create(path).unwrap());
+    zip.start_file("a.class", SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"class").unwrap();
+    if let Some(text) = mcmod {
+        zip.start_file("mcmod.info", SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(text.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap();
+}
+fn mod_rule(
+    action: ModAction,
+    name: &str,
+    ids: &[&str],
+    stem: &str,
+    file: Option<&Path>,
+) -> ModRule {
+    ModRule {
+        action,
+        enabled: true,
+        name: name.into(),
+        mod_ids: ids.iter().map(|s| s.to_string()).collect(),
+        stem: stem.into(),
+        file: file.map(|f| f.to_string_lossy().into_owned()),
+    }
+}
+fn mod_pack(dir: &Path) -> std::path::PathBuf {
+    let pack = dir.join("pack");
+    fs::create_dir_all(pack.join("config")).unwrap();
+    jar(
+        &pack.join("mods/journeymap-1.7.10-5.2.19.jar"),
+        Some(r#"[{"modid":"journeymap"}]"#),
+    );
+    jar(&pack.join("mods/passivemobs-1.3.0.jar"), None);
+    jar(
+        &pack.join("mods/other-1.0.jar"),
+        Some(r#"[{"modid":"other"}]"#),
+    );
+    pack
+}
+
+#[test]
+fn mod_rules_remove_replace_and_report_missing() {
+    let (dir, source, _zip, target) = setup();
+    let pack = mod_pack(dir.path());
+    let user = dir
+        .path()
+        .join("elsewhere/journeymap-1.7.10-5.2.20-unlimited.jar");
+    jar(&user, Some(r#"[{"modid":"JourneyMap"}]"#));
+    let ghost = dir.path().join("elsewhere/ghost-1.0.jar");
+    let mods = [
+        mod_rule(ModAction::Remove, "Passive", &[], "passivemobs", None),
+        mod_rule(ModAction::Remove, "Nothing", &["nope"], "nope", None),
+        mod_rule(
+            ModAction::Add,
+            "JM",
+            &["journeymap"],
+            "journeymap",
+            Some(&user),
+        ),
+        mod_rule(ModAction::Add, "Ghost", &[], "ghost", Some(&ghost)),
+    ];
+    let prepared = prepare(&pack, &source, &target, false, &[], &mods, &[], |_| {}).unwrap();
+    let plan = prepared.preview().mods.clone();
+    assert_eq!(plan.removed[0].files, ["mods/passivemobs-1.3.0.jar"]);
+    assert!(plan.removed[1].files.is_empty());
+    assert_eq!(
+        plan.added[0].file,
+        "mods/journeymap-1.7.10-5.2.20-unlimited.jar"
+    );
+    assert_eq!(
+        plan.added[0].replaces,
+        ["mods/journeymap-1.7.10-5.2.19.jar"]
+    );
+    assert!(!plan.added[0].missing);
+    assert!(plan.added[1].missing);
+    assert!(plan.duplicates.is_empty());
+    // Preparing never changes the pack or the destination.
+    assert!(pack.join("mods/passivemobs-1.3.0.jar").is_file());
+    assert!(!target.exists());
+    prepared.finish(&[], |_| {}).unwrap();
+    let mut names: Vec<_> = fs::read_dir(target.join("mods"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        ["journeymap-1.7.10-5.2.20-unlimited.jar", "other-1.0.jar"]
+    );
+}
+
+#[test]
+fn mod_addition_that_disappears_fails_before_publishing() {
+    let (dir, source, _zip, target) = setup();
+    let pack = mod_pack(dir.path());
+    let user = dir.path().join("elsewhere/extra-1.0.jar");
+    jar(&user, None);
+    let mods = [mod_rule(ModAction::Add, "Extra", &[], "extra", Some(&user))];
+    let prepared = prepare(&pack, &source, &target, false, &[], &mods, &[], |_| {}).unwrap();
+    fs::remove_file(&user).unwrap();
+    let error = prepared.finish(&[], |_| {}).unwrap_err();
+    assert!(error.contains("Mod file disappeared"), "{error}");
+    assert!(!target.exists());
+}
+
+#[test]
+fn duplicates_are_reported_for_shared_ids_and_transferred_jars() {
+    let (dir, source, _zip, target) = setup();
+    let pack = mod_pack(dir.path());
+    // Stored identity differs from what the jar really declares.
+    let user = dir.path().join("elsewhere/renamed.jar");
+    jar(&user, Some(r#"[{"modid":"other"}]"#));
+    jar(
+        &source.join("mods/old-other.jar"),
+        Some(r#"[{"modid":"other"}]"#),
+    );
+    let mods = [mod_rule(ModAction::Add, "X", &["x"], "x", Some(&user))];
+    let rules = [rule("mods/old-other.jar", Conflict::Replace)];
+    let prepared = prepare(&pack, &source, &target, false, &rules, &mods, &[], |_| {}).unwrap();
+    assert_eq!(
+        prepared.preview().mods.duplicates,
+        [vec![
+            "mods/old-other.jar".to_string(),
+            "mods/other-1.0.jar".to_string(),
+            "mods/renamed.jar".to_string()
+        ]]
+    );
+}
+
+const LANG: &str = "config/txloader/load/BetterQuesting[betterquesting]/lang";
+fn rename_rule(path: &str, to: &str) -> RenameRule {
+    RenameRule {
+        path: path.into(),
+        to: to.into(),
+        enabled: true,
+    }
+}
+fn lang_pack(dir: &Path, files: &[(&str, &str)]) -> std::path::PathBuf {
+    let pack = dir.join("pack");
+    fs::create_dir_all(pack.join("mods")).unwrap();
+    fs::create_dir_all(pack.join("config")).unwrap();
+    for (name, text) in files {
+        let path = pack.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    pack
+}
+
+#[test]
+fn rename_moves_file_and_replaces_existing_target() {
+    let (dir, source, _zip, target) = setup();
+    let ru = format!("{LANG}/ru_RU.lang");
+    let en = format!("{LANG}/en_US.lang");
+    let pack = lang_pack(dir.path(), &[(&ru, "russian"), (&en, "english")]);
+    let renames = [rename_rule(&ru, "en_US.lang")];
+    let prepared = prepare(&pack, &source, &target, false, &[], &[], &renames, |_| {}).unwrap();
+    let preview = &prepared.preview().renames;
+    assert!(preview[0].found && preview[0].replaces);
+    prepared.finish(&[], |_| {}).unwrap();
+    assert!(!target.join(&ru).exists());
+    assert_eq!(fs::read_to_string(target.join(&en)).unwrap(), "russian");
+    // Preparing never changes the pack itself.
+    assert!(pack.join(&ru).is_file());
+}
+
+#[test]
+fn rename_without_existing_target_and_disabled_or_missing_rules_are_skipped() {
+    let (dir, source, _zip, target) = setup();
+    let ru = format!("{LANG}/ru_RU.lang");
+    let pack = lang_pack(dir.path(), &[(&ru, "russian")]);
+    let mut disabled = rename_rule(&ru, "xx_XX.lang");
+    disabled.enabled = false;
+    let renames = [
+        rename_rule(&ru, "en_US.lang"),
+        rename_rule("config/ghost/ru_RU.lang", "en_US.lang"),
+        disabled,
+    ];
+    let prepared = prepare(&pack, &source, &target, false, &[], &[], &renames, |_| {}).unwrap();
+    let preview = &prepared.preview().renames;
+    assert_eq!(preview.len(), 2);
+    assert!(preview[0].found && !preview[0].replaces);
+    assert!(!preview[1].found);
+    prepared.finish(&[], |_| {}).unwrap();
+    assert_eq!(
+        fs::read_to_string(target.join(format!("{LANG}/en_US.lang"))).unwrap(),
+        "russian"
+    );
+    assert!(!target.join("config/ghost").exists());
+    assert!(!target.join(format!("{LANG}/xx_XX.lang")).exists());
+}
+
+#[test]
+fn rename_applies_to_transferred_files() {
+    let (dir, source, _zip, target) = setup();
+    let pack = lang_pack(dir.path(), &[]);
+    fs::create_dir_all(source.join("config")).unwrap();
+    fs::write(source.join("config/old.cfg"), "user").unwrap();
+    let rules = [rule("config/old.cfg", Conflict::Replace)];
+    let renames = [rename_rule("config/old.cfg", "new.cfg")];
+    let prepared = prepare(
+        &pack,
+        &source,
+        &target,
+        false,
+        &rules,
+        &[],
+        &renames,
+        |_| {},
+    )
+    .unwrap();
+    assert!(prepared.preview().renames[0].found);
+    prepared.finish(&[], |_| {}).unwrap();
+    assert!(!target.join("config/old.cfg").exists());
+    assert_eq!(
+        fs::read_to_string(target.join("config/new.cfg")).unwrap(),
+        "user"
+    );
+}
+
+#[test]
+fn rename_refuses_to_replace_a_folder() {
+    let (dir, source, _zip, target) = setup();
+    let pack = lang_pack(dir.path(), &[("config/a.txt", "a")]);
+    fs::create_dir_all(pack.join("config/b.txt")).unwrap();
+    let renames = [rename_rule("config/a.txt", "b.txt")];
+    let prepared = prepare(&pack, &source, &target, false, &[], &[], &renames, |_| {}).unwrap();
+    assert!(prepared.finish(&[], |_| {}).is_err());
+    assert!(!target.exists());
 }

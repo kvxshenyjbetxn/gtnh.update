@@ -52,6 +52,10 @@ fn relative_selections(root: String, paths: Vec<String>) -> Result<Vec<String>, 
         .map_err(|e| e.to_string())
 }
 #[tauri::command]
+fn inspect_mod(path: String) -> Result<gtnh_core::mods::ModInfo, String> {
+    gtnh_core::mods::inspect(std::path::Path::new(&path))
+}
+#[tauri::command]
 async fn list_releases() -> Result<Vec<gtnh_core::releases::Release>, String> {
     gtnh_core::releases::fetch_official().await
 }
@@ -78,12 +82,17 @@ pub fn run() {
                 .state::<downloads::DownloadStore>()
                 .restore(directory.join("downloads"));
             // Staging folders of a killed installation can be several GB; best effort.
-            if let Some(instances) = gtnh_core::load_settings(&directory)
-                .ok()
-                .and_then(|s| s.prism_instances_directory)
+            let settings = gtnh_core::load_settings(&directory).ok();
+            if let Some(instances) = settings
+                .as_ref()
+                .and_then(|s| s.prism_instances_directory.as_ref())
             {
                 let _ =
-                    gtnh_core::installation::remove_stale_staging(std::path::Path::new(&instances));
+                    gtnh_core::installation::remove_stale_staging(std::path::Path::new(instances));
+            }
+            // Staging folders of finished server updates that were locked at the time.
+            if let Some(server) = settings.as_ref().and_then(|s| s.server_source.as_ref()) {
+                let _ = gtnh_core::server_update::cleanup_leftovers(std::path::Path::new(server));
             }
             app.manage(ConfigStore {
                 directory,
@@ -100,12 +109,14 @@ pub fn run() {
             instances_directory,
             relative_selections,
             list_releases,
+            inspect_mod,
             downloads::start_download,
             downloads::cancel_download,
             downloads::delete_download,
             downloads::adopt_downloads,
             downloads::download_status,
             installation::prepare_installation,
+            installation::prepare_server_update,
             installation::installation_status,
             installation::finish_installation,
             installation::cancel_installation,

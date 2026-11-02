@@ -1,10 +1,9 @@
-import type { Rule } from './types';
+import type { ModPlan, ModRule, RenamePreview, RenameRule, Rule } from './types';
 
-export type InstallRequest = {
-  client: boolean;
-  source: string;
-  rules: Rule[];
-} & ({ url: string; localPath?: never } | { url?: never; localPath: string });
+type PackSource = { url: string; localPath?: never } | { url?: never; localPath: string };
+export type ClientInstallRequest = { client: true; source: string; rules: Rule[]; mods: ModRule[]; renames: RenameRule[] } & PackSource;
+export type ServerInstallRequest = { client: false; server: string; rules: Rule[]; mods: ModRule[] } & PackSource;
+export type InstallRequest = ClientInstallRequest | ServerInstallRequest;
 
 export function packName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop()?.replace(/\.zip$/i, '') || 'GTNH';
@@ -16,18 +15,28 @@ export interface Transfer {
   conflict: Rule['conflict'];
   bytes: number;
 }
-export interface Preview { destination: string; files: Transfer[]; missing: string[] }
+export interface ServerItem { path: string; directory: boolean; old: boolean; new: boolean }
+export interface ScriptChange { path: string; old: string | null; new: string | null }
+export interface ServerPreview {
+  server: string; backup: string; previousBackup: boolean;
+  replaced: ServerItem[]; added: string[]; journeyMap: boolean;
+  scripts: ScriptChange[]; javaChange: 'toJava17' | 'toJava8' | null;
+  recovered: 'rolledBack' | 'completed' | null;
+  mods: ModPlan; files: Transfer[]; missing: string[];
+}
+export interface Preview { destination: string; files: Transfer[]; missing: string[]; mods: ModPlan; renames: RenamePreview[] }
 export interface InstallStatus {
   revision: number;
   phase: '' | 'preparing' | 'preview' | 'copying' | 'completed' | 'failed';
   url: string;
   client: boolean;
-  progress: { stage: 'extracting' | 'preparingPack' | 'copying' | 'publishing'; done: number; total: number } | null;
+  progress: { stage: 'extracting' | 'preparingPack' | 'copying' | 'replacing' | 'publishing'; done: number; total: number } | null;
   preview: Preview | null;
+  serverPreview: ServerPreview | null;
   destination: string | null;
   error: string | null;
 }
-export function unresolvedConflicts(preview: Preview, decisions: Record<string, Rule['conflict']>): string[] {
+export function unresolvedConflicts(preview: { files: Transfer[] }, decisions: Record<string, Rule['conflict']>): string[] {
   return preview.files.filter(file => file.exists && !file.directory && file.conflict === 'ask'
     && decisions[file.path] !== 'replace' && decisions[file.path] !== 'keep').map(file => file.path);
 }

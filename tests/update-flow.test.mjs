@@ -34,7 +34,7 @@ test('request captures rules deeply only after transfer step is explicitly compl
   const d = ready();
   const request = buildInstallRequest(d, true, rules);
   rule.enabled = false; rules.push({ ...rule, path: 'options.txt' });
-  assert.deepEqual(request, { client: true, source: '/old', localPath: '/new.zip', rules: [{ path: 'saves', enabled: true, conflict: 'replace', custom: false }] });
+  assert.deepEqual(request, { client: true, source: '/old', localPath: '/new.zip', rules: [{ path: 'saves', enabled: true, conflict: 'replace', custom: false }], mods: [], renames: [] });
   const downloading = changePack(d, { url: 'https://example.test/a.zip' });
   assert.equal(buildInstallRequest(downloading, false, []), null);
 });
@@ -48,4 +48,26 @@ test('active transaction freezes draft transitions including initial sending, fa
   assert.equal(transactionBusy('', true), true);
   for (const phase of ['', 'failed', 'completed']) assert.equal(transactionBusy(phase, false), false);
   assert.equal(transitionDraft(d, { kind: 'source', source: '/other' }, false).completed, 0);
+});
+test('server request carries the server folder, rules and mods', () => {
+  const d = ready();
+  const rules = [{ path: 'config/serverutilities.cfg', enabled: true, conflict: 'ask', custom: true }];
+  const mods = [{ action: 'add', enabled: true, name: 'X', modIds: ['x'], stem: 'x-1', file: '/mods/x-1.jar' }];
+  assert.deepEqual(buildInstallRequest(d, false, rules, mods), { client: false, server: '/old', localPath: '/new.zip', rules, mods });
+  assert.deepEqual(buildInstallRequest(d, false), { client: false, server: '/old', localPath: '/new.zip', rules: [], mods: [] });
+  const url = changePack(d, { url: 'https://example.test/s.zip' });
+  assert.deepEqual(buildInstallRequest({ ...url, completed: 3 }, false), { client: false, server: '/old', url: 'https://example.test/s.zip', rules: [], mods: [] });
+});
+test('client request carries a deep copy of mod rules', () => {
+  const mods = [{ action: 'remove', enabled: true, name: 'JM', modIds: ['journeymap'], stem: 'journeymap', file: null }];
+  const request = buildInstallRequest(ready(), true, [], mods);
+  mods[0].modIds.push('other'); mods[0].enabled = false;
+  assert.deepEqual(request.mods, [{ action: 'remove', enabled: true, name: 'JM', modIds: ['journeymap'], stem: 'journeymap', file: null }]);
+});
+test('client request carries a deep copy of rename rules and the server request none', () => {
+  const renames = [{ path: 'config/a/ru_RU.lang', to: 'en_US.lang', enabled: true }];
+  const request = buildInstallRequest(ready(), true, [], [], renames);
+  renames[0].to = 'x.lang';
+  assert.deepEqual(request.renames, [{ path: 'config/a/ru_RU.lang', to: 'en_US.lang', enabled: true }]);
+  assert.equal('renames' in buildInstallRequest({ ...ready(), source: '/s' }, false, [], [], renames), false);
 });

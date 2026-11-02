@@ -1,4 +1,4 @@
-import type { Rule } from './types';
+import type { ModRule, RenameRule, Rule } from './types';
 import type { InstallRequest, InstallStatus } from './installation';
 
 export type UpdateStep = 0 | 1 | 2 | 3;
@@ -27,9 +27,12 @@ export function continueStep(draft: UpdateDraft): UpdateDraft {
 export function openStep(draft: UpdateDraft, step: UpdateStep): UpdateDraft {
   return step <= draft.completed ? { ...draft, step } : draft;
 }
-export function buildInstallRequest(draft: UpdateDraft, client: boolean, rules: Rule[]): InstallRequest | null {
+export function buildInstallRequest(draft: UpdateDraft, client: boolean, rules: Rule[] = [], mods: ModRule[] = [], renames: RenameRule[] = []): InstallRequest | null {
   if (draft.completed < 3 || !draft.source || !draft.pack) return null;
-  return { ...draft.pack, client, source: draft.source, rules: rules.map(rule => ({ ...rule })) };
+  const copiedRules = rules.map(rule => ({ ...rule }));
+  const copiedMods = mods.map(mod => ({ ...mod, modIds: [...mod.modIds] }));
+  if (!client) return { ...draft.pack, client: false, server: draft.source, rules: copiedRules, mods: copiedMods };
+  return { ...draft.pack, client: true, source: draft.source, rules: copiedRules, mods: copiedMods, renames: renames.map(rename => ({ ...rename })) };
 }
 export function transactionBusy(phase: InstallStatus['phase'], sending: boolean): boolean {
   return sending || phase === 'preparing' || phase === 'preview' || phase === 'copying';

@@ -4,9 +4,9 @@
   import { messages } from './i18n';
   import type { Rule } from './types';
 
-  let { rules = $bindable(), source, language, disabled, desktop, onChange, picking = $bindable(false) }: {
+  let { rules = $bindable(), source, language, disabled, desktop, onChange, picking = $bindable(false), server = false }: {
     rules: Rule[]; source: string; language: 'uk' | 'en'; disabled: boolean;
-    desktop: boolean; onChange: () => void; picking?: boolean;
+    desktop: boolean; onChange: () => void; picking?: boolean; server?: boolean;
   } = $props();
   let error = $state('');
   let notice = $state('');
@@ -30,8 +30,9 @@
 </script>
 
 <fieldset disabled={disabled || picking}>
+  {#if server}<h4>{t.serverRulesTitle}</h4><p class="muted">{t.serverRulesHint}</p>{/if}
   <p class="transfer-summary">{t.enabledRules}: <strong>{rules.filter(rule => rule.enabled).length}</strong> / {rules.length}</p>
-  <details class="rules-details">
+  <details class="rules-details" open={server}>
     <summary>{t.allRules}</summary>
     <div class="rule-list">
       {#each rules as rule (rule.path)}

@@ -1,5 +1,8 @@
 //! Staged, non-destructive installation of client/server ZIPs and local folders.
-use crate::{validate_rule_path, Conflict, Rule};
+use crate::{
+    mods::{self, ModPlan, Sources},
+    valid_rename, validate_rule_path, Conflict, ModRule, RenameRule, Rule,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -22,9 +25,19 @@ pub struct Preview {
     pub destination: String,
     pub files: Vec<Transfer>,
     pub missing: Vec<String>,
+    pub mods: ModPlan,
+    pub renames: Vec<RenamePreview>,
+}
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenamePreview {
+    pub path: String,
+    pub to: String,
+    pub found: bool,
+    pub replaces: bool,
 }
 impl Transfer {
-    fn will_copy(&self, decisions: &HashMap<&str, Conflict>) -> bool {
+    pub(crate) fn will_copy(&self, decisions: &HashMap<&str, Conflict>) -> bool {
         !self.directory
             && (!self.exists
                 || self.conflict == Conflict::Replace
@@ -66,6 +79,8 @@ pub struct Prepared {
     game: PathBuf,
     destination: PathBuf,
     preview: Preview,
+    additions: Sources,
+    renames: Vec<RenameRule>,
 }
 fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -130,7 +145,11 @@ fn reject_coalesced_entries(
     }
     Ok(())
 }
-fn extract(archive: &Path, into: &Path, progress: &impl Fn(Progress)) -> Result<(), String> {
+pub(crate) fn extract(
+    archive: &Path,
+    into: &Path,
+    progress: &impl Fn(Progress),
+) -> Result<(), String> {
     let mut zip = zip::ZipArchive::new(fs::File::open(archive).map_err(error)?).map_err(error)?;
     if zip.len() > 200_000 {
         return Err("Too many archive entries".into());
@@ -202,7 +221,7 @@ fn extract(archive: &Path, into: &Path, progress: &impl Fn(Progress)) -> Result<
     }
     Ok(())
 }
-fn pack_root(extracted: &Path, client: bool) -> Result<PathBuf, String> {
+pub(crate) fn pack_root(extracted: &Path, client: bool) -> Result<PathBuf, String> {
     let valid = |path: &Path| {
         if client {
             path.join("instance.cfg").is_file() && path.join("mmc-pack.json").is_file()
@@ -229,7 +248,7 @@ fn pack_root(extracted: &Path, client: bool) -> Result<PathBuf, String> {
         )
     }
 }
-fn checked_source(root: &Path, relative: &str) -> Result<Option<fs::Metadata>, String> {
+pub(crate) fn checked_source(root: &Path, relative: &str) -> Result<Option<fs::Metadata>, String> {
     let mut current = root.to_owned();
     let mut last = None;
     for component in relative.split('/') {
@@ -253,7 +272,7 @@ fn checked_source(root: &Path, relative: &str) -> Result<Option<fs::Metadata>, S
     }
     Ok(last)
 }
-fn collect(
+pub(crate) fn collect(
     root: &Path,
     path: &str,
     conflict: Conflict,
@@ -287,7 +306,11 @@ fn collect(
     Ok(())
 }
 
-fn stage_folder(pack: &Path, into: &Path, progress: &impl Fn(Progress)) -> Result<(), String> {
+pub(crate) fn stage_folder(
+    pack: &Path,
+    into: &Path,
+    progress: &impl Fn(Progress),
+) -> Result<(), String> {
     let mut entries = BTreeMap::new();
     for entry in fs::read_dir(pack).map_err(error)? {
         let name = entry
@@ -356,10 +379,13 @@ const STAGING_PREFIX: &str = ".gtnh-install-";
 
 /// Removes staging folders left behind by a killed installation; returns how many were removed.
 pub fn remove_stale_staging(parent: &Path) -> Result<usize, String> {
+    remove_stale_prefixed(parent, STAGING_PREFIX)
+}
+pub(crate) fn remove_stale_prefixed(parent: &Path, prefix: &str) -> Result<usize, String> {
     let mut removed = 0;
     for item in fs::read_dir(parent).map_err(error)?.flatten() {
         let matches = item.file_name().to_str().is_some_and(|name| {
-            name.strip_prefix(STAGING_PREFIX).is_some_and(|suffix| {
+            name.strip_prefix(prefix).is_some_and(|suffix| {
                 suffix.len() == 6 && suffix.bytes().all(|b| b.is_ascii_alphanumeric())
             })
         });
@@ -373,12 +399,85 @@ pub fn remove_stale_staging(parent: &Path) -> Result<usize, String> {
     Ok(removed)
 }
 
+/// Collects the enabled transfer rules from `source`; also returns rule paths absent there.
+pub(crate) fn collect_rules(
+    source: &Path,
+    rules: &[Rule],
+) -> Result<(BTreeMap<String, Transfer>, Vec<String>), String> {
+    let mut files = BTreeMap::new();
+    let mut missing = Vec::new();
+    let mut enabled: Vec<_> = rules.iter().filter(|r| r.enabled).collect();
+    enabled.sort_by_key(|r| r.path.len()); // More-specific rules override parent rules.
+    for rule in enabled {
+        if !validate_rule_path(&rule.path) {
+            return Err(format!("Unsafe rule: {}", rule.path));
+        }
+        if checked_source(source, &rule.path)?.is_none() {
+            missing.push(rule.path.clone());
+            continue;
+        }
+        collect(source, &rule.path, rule.conflict, &mut files)?;
+    }
+    Ok((files, missing))
+}
+/// Sets `exists` against the staged `game` folder and rejects case/type clashes with it.
+pub(crate) fn check_targets(
+    game: &Path,
+    files: &mut BTreeMap<String, Transfer>,
+) -> Result<(), String> {
+    let mut aliases = HashMap::new();
+    // Include new pack paths in the case-alias/type check.
+    fn scan(
+        path: &Path,
+        base: &Path,
+        names: &mut HashMap<String, (String, bool)>,
+    ) -> Result<(), String> {
+        for entry in fs::read_dir(path).map_err(error)? {
+            let entry = entry.map_err(error)?;
+            let p = entry.path();
+            let relative = p
+                .strip_prefix(base)
+                .map_err(error)?
+                .to_str()
+                .ok_or("Non-Unicode archive path")?
+                .replace('\\', "/");
+            register(names, &relative, p.is_dir())?;
+            if p.is_dir() {
+                scan(&p, base, names)?;
+            }
+        }
+        Ok(())
+    }
+    scan(game, game, &mut aliases)?;
+    for file in files.values_mut() {
+        let target = game.join(&file.path);
+        file.exists = target.exists();
+        // Matching regular files are expected conflicts, not duplicate archive entries.
+        if let Some((name, directory)) = aliases.get(&file.path.to_lowercase()) {
+            // Parent directories merge regardless of case; a file's own name must match.
+            let last = |p: &str| p.rsplit('/').next().unwrap_or_default().to_owned();
+            if *directory != file.directory || (!file.directory && last(name) != last(&file.path)) {
+                return Err(format!(
+                    "Incompatible file/directory or letter case: {}",
+                    file.path
+                ));
+            }
+        } else {
+            register(&mut aliases, &file.path, file.directory)?;
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn prepare(
     archive: &Path,
     source: &Path,
     destination: &Path,
     client: bool,
     rules: &[Rule],
+    mods: &[ModRule],
+    renames: &[RenameRule],
     progress: impl Fn(Progress),
 ) -> Result<Prepared, String> {
     let source = source.canonicalize().map_err(error)?;
@@ -444,65 +543,19 @@ pub fn prepare(
     } else {
         root.clone()
     };
-    let mut files = BTreeMap::new();
-    let mut missing = Vec::new();
-    let mut enabled: Vec<_> = rules.iter().filter(|r| r.enabled).collect();
-    enabled.sort_by_key(|r| r.path.len()); // More-specific rules override parent rules.
-    for rule in enabled {
-        if !validate_rule_path(&rule.path) {
-            return Err(format!("Unsafe rule: {}", rule.path));
-        }
-        if checked_source(&source, &rule.path)?.is_none() {
-            missing.push(rule.path.clone());
-            continue;
-        }
-        collect(&source, &rule.path, rule.conflict, &mut files)?;
-    }
-    let mut aliases = HashMap::new();
-    // Include new pack paths in the case-alias/type check.
-    fn scan(
-        path: &Path,
-        base: &Path,
-        names: &mut HashMap<String, (String, bool)>,
-    ) -> Result<(), String> {
-        for entry in fs::read_dir(path).map_err(error)? {
-            let entry = entry.map_err(error)?;
-            let p = entry.path();
-            let relative = p
-                .strip_prefix(base)
-                .map_err(error)?
-                .to_str()
-                .ok_or("Non-Unicode archive path")?
-                .replace('\\', "/");
-            register(names, &relative, p.is_dir())?;
-            if p.is_dir() {
-                scan(&p, base, names)?;
-            }
-        }
-        Ok(())
-    }
-    scan(&game, &game, &mut aliases)?;
-    for file in files.values_mut() {
-        let target = game.join(&file.path);
-        file.exists = target.exists();
-        // Matching regular files are expected conflicts, not duplicate archive entries.
-        if let Some((name, directory)) = aliases.get(&file.path.to_lowercase()) {
-            // Parent directories merge regardless of case; a file's own name must match.
-            let last = |p: &str| p.rsplit('/').next().unwrap_or_default().to_owned();
-            if *directory != file.directory || (!file.directory && last(name) != last(&file.path)) {
-                return Err(format!(
-                    "Incompatible file/directory or letter case: {}",
-                    file.path
-                ));
-            }
-        } else {
-            register(&mut aliases, &file.path, file.directory)?;
-        }
-    }
+    let (mut plan, additions) = mods::apply_rules(&game, mods)?;
+    let (mut files, missing) = collect_rules(&source, rules)?;
+    check_targets(&game, &mut files)?;
+    let files: Vec<_> = files.into_values().collect();
+    plan.duplicates = mods::find_duplicates(&game, &additions, &files, &source);
+    let renames: Vec<_> = renames.iter().filter(|r| r.enabled).cloned().collect();
+    let rename_previews = preview_renames(&game, &files, &renames)?;
     let preview = Preview {
         destination: destination.to_string_lossy().into_owned(),
-        files: files.into_values().collect(),
+        files,
         missing,
+        mods: plan,
+        renames: rename_previews,
     };
     if fs2::available_space(&game).map_err(error)? < preview.required_bytes(&[])? {
         return Err("Not enough free space for selected files".into());
@@ -514,8 +567,140 @@ pub fn prepare(
         source,
         destination,
         preview,
+        additions,
+        renames,
     })
 }
+/// Source and target (same folder, new name) of a rename rule, relative to the game folder.
+fn rename_paths(rule: &RenameRule) -> Result<(&str, String), String> {
+    if !valid_rename(rule) {
+        return Err(format!("Unsafe rename rule: {}", rule.path));
+    }
+    let target = match rule.path.rsplit_once('/') {
+        Some((parent, _)) => format!("{parent}/{}", rule.to),
+        None => rule.to.clone(),
+    };
+    Ok((&rule.path, target))
+}
+/// `Some(is_file)` for an existing staged path; links and special files are errors.
+fn staged_kind(game: &Path, relative: &str) -> Result<Option<bool>, String> {
+    Ok(checked_source(game, relative)?.map(|m| m.is_file()))
+}
+fn preview_renames(
+    game: &Path,
+    files: &[Transfer],
+    renames: &[RenameRule],
+) -> Result<Vec<RenamePreview>, String> {
+    let transferred: HashMap<_, _> = files
+        .iter()
+        .map(|f| (f.path.to_lowercase(), f.directory))
+        .collect();
+    let mut previews = Vec::new();
+    for rule in renames {
+        let (source, target) = rename_paths(rule)?;
+        let found = staged_kind(game, source)? == Some(true)
+            || transferred.get(&source.to_lowercase()) == Some(&false);
+        let replaces = staged_kind(game, &target)? == Some(true)
+            || transferred.get(&target.to_lowercase()) == Some(&false);
+        previews.push(RenamePreview {
+            path: rule.path.clone(),
+            to: rule.to.clone(),
+            found,
+            replaces,
+        });
+    }
+    Ok(previews)
+}
+/// Renames files in the staged game folder; rules whose source is absent are skipped.
+fn apply_renames(game: &Path, renames: &[RenameRule]) -> Result<(), String> {
+    for rule in renames {
+        let (source, target) = rename_paths(rule)?;
+        if staged_kind(game, source)? != Some(true) {
+            continue;
+        }
+        let (source_path, target_path) = (game.join(source), game.join(&target));
+        match staged_kind(game, &target)? {
+            Some(true) => {
+                if source_path.canonicalize().map_err(error)?
+                    == target_path.canonicalize().map_err(error)?
+                {
+                    return Err(format!("Rename target is the same file: {source}"));
+                }
+                fs::remove_file(&target_path).map_err(error)?;
+            }
+            Some(false) => return Err(format!("Rename target is a folder: {target}")),
+            None => {}
+        }
+        fs::rename(&source_path, &target_path).map_err(error)?;
+    }
+    Ok(())
+}
+/// Every existing-file Ask conflict needs an explicit keep/replace before anything is copied.
+pub(crate) fn validate_decisions(files: &[Transfer], decisions: &[Decision]) -> Result<(), String> {
+    let decisions: HashMap<_, _> = decisions
+        .iter()
+        .map(|d| (d.path.as_str(), d.conflict))
+        .collect();
+    for file in files {
+        if file.exists
+            && !file.directory
+            && file.conflict == Conflict::Ask
+            && !matches!(
+                decisions.get(file.path.as_str()),
+                Some(Conflict::Keep | Conflict::Replace)
+            )
+        {
+            return Err(format!("Choose replace or keep for {}", file.path));
+        }
+    }
+    Ok(())
+}
+/// Copies transfer files from `source` into the staged `game` folder.
+pub(crate) fn transfer_files(
+    source: &Path,
+    game: &Path,
+    files: &[Transfer],
+    decisions: &[Decision],
+    progress: &impl Fn(Progress),
+) -> Result<(), String> {
+    let map: HashMap<_, _> = decisions
+        .iter()
+        .map(|d| (d.path.as_str(), d.conflict))
+        .collect();
+    let required_bytes = files
+        .iter()
+        .filter(|f| f.will_copy(&map))
+        .try_fold(0u64, |sum, f| {
+            sum.checked_add(f.bytes)
+                .ok_or_else(|| "Transfer size overflow".to_string())
+        })?;
+    // Resolve all questions before copying even the first file.
+    validate_decisions(files, decisions)?;
+    if fs2::available_space(game).map_err(error)? < required_bytes {
+        return Err("Not enough free space for confirmed transfer".into());
+    }
+    for (index, file) in files.iter().enumerate() {
+        let metadata = checked_source(source, &file.path)?
+            .ok_or_else(|| format!("Source disappeared: {}", file.path))?;
+        if metadata.is_dir() != file.directory {
+            return Err(format!("Source changed: {}", file.path));
+        }
+        let target = game.join(&file.path);
+        if file.directory {
+            fs::create_dir_all(&target).map_err(error)?;
+        } else if file.will_copy(&map) {
+            fs::create_dir_all(target.parent().ok_or("Invalid transfer target")?).map_err(error)?;
+            fs::copy(source.join(&file.path), &target).map_err(error)?;
+        }
+        progress(Progress {
+            stage: "copying",
+            done: index + 1,
+            total: files.len(),
+        });
+    }
+    Ok(())
+}
+
 impl Prepared {
     pub fn preview(&self) -> &Preview {
         &self.preview
@@ -525,47 +710,15 @@ impl Prepared {
         decisions: &[Decision],
         progress: impl Fn(Progress),
     ) -> Result<PathBuf, String> {
-        let required_bytes = self.preview.required_bytes(decisions)?;
-        let decisions: HashMap<_, _> = decisions
-            .iter()
-            .map(|d| (d.path.as_str(), d.conflict))
-            .collect();
-        // Resolve all questions before copying even the first file.
-        for file in &self.preview.files {
-            if file.exists
-                && !file.directory
-                && file.conflict == Conflict::Ask
-                && !matches!(
-                    decisions.get(file.path.as_str()),
-                    Some(Conflict::Keep | Conflict::Replace)
-                )
-            {
-                return Err(format!("Choose replace or keep for {}", file.path));
-            }
-        }
-        if fs2::available_space(&self.game).map_err(error)? < required_bytes {
-            return Err("Not enough free space for confirmed transfer".into());
-        }
-        for (index, file) in self.preview.files.iter().enumerate() {
-            let metadata = checked_source(&self.source, &file.path)?
-                .ok_or_else(|| format!("Source disappeared: {}", file.path))?;
-            if metadata.is_dir() != file.directory {
-                return Err(format!("Source changed: {}", file.path));
-            }
-            let target = self.game.join(&file.path);
-            if file.directory {
-                fs::create_dir_all(&target).map_err(error)?;
-            } else if file.will_copy(&decisions) {
-                fs::create_dir_all(target.parent().ok_or("Invalid transfer target")?)
-                    .map_err(error)?;
-                fs::copy(self.source.join(&file.path), &target).map_err(error)?;
-            }
-            progress(Progress {
-                stage: "copying",
-                done: index + 1,
-                total: self.preview.files.len(),
-            });
-        }
+        transfer_files(
+            &self.source,
+            &self.game,
+            &self.preview.files,
+            decisions,
+            &progress,
+        )?;
+        mods::apply_additions(&self.game, &self.additions)?;
+        apply_renames(&self.game, &self.renames)?;
         progress(Progress {
             stage: "publishing",
             done: 0,
@@ -577,7 +730,7 @@ impl Prepared {
 }
 // Atomic no-replace publication, including empty directories created after preview.
 #[cfg(unix)]
-fn publish(source: &Path, destination: &Path) -> io::Result<()> {
+pub(crate) fn publish(source: &Path, destination: &Path) -> io::Result<()> {
     rustix::fs::renameat_with(
         rustix::fs::CWD,
         source,
@@ -588,7 +741,7 @@ fn publish(source: &Path, destination: &Path) -> io::Result<()> {
     .map_err(Into::into)
 }
 #[cfg(windows)]
-fn publish(source: &Path, destination: &Path) -> io::Result<()> {
+pub(crate) fn publish(source: &Path, destination: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::MoveFileW;
 

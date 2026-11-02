@@ -15,4 +15,21 @@ export interface Settings {
   prismInstancesDirectory: string | null;
   clientRules: Rule[];
   serverRules: Rule[];
+  clientMods: ModRule[];
+  serverMods: ModRule[];
+  clientRenames: RenameRule[];
 }
+export interface RenameRule { path: string; to: string; enabled: boolean }
+export interface ModRule {
+  action: 'add' | 'remove';
+  enabled: boolean;
+  name: string;
+  modIds: string[];
+  stem: string;
+  file: string | null;
+}
+export interface RenamePreview { path: string; to: string; found: boolean; replaces: boolean }
+export interface ModInfo { name: string; modIds: string[]; stem: string; file: string }
+export interface ModRemoval { name: string; files: string[] }
+export interface ModAddition { name: string; file: string; source: string; replaces: string[]; missing: boolean }
+export interface ModPlan { removed: ModRemoval[]; added: ModAddition[]; duplicates: string[][] }

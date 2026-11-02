@@ -2,9 +2,11 @@
 pub mod downloads;
 pub mod installation;
 mod instance_metadata;
+pub mod mods;
 pub mod pack_selection;
 pub mod releases;
 pub mod selection;
+pub mod server_update;
 use serde::{Deserialize, Serialize};
 use std::{fs, io::Write, path::Path};
 use thiserror::Error;
@@ -48,6 +50,33 @@ pub struct Rule {
     pub custom: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ModAction {
+    Add,
+    Remove,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModRule {
+    pub action: ModAction,
+    pub enabled: bool,
+    pub name: String,
+    pub mod_ids: Vec<String>,
+    pub stem: String,
+    #[serde(default)]
+    pub file: Option<String>,
+}
+
+/// Renames a file of the new pack inside its own folder (`path` is relative to the game folder).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RenameRule {
+    pub path: String,
+    pub to: String,
+    pub enabled: bool,
+}
+
 const CLIENT_PATHS: &[&str] = &[
     "config/vendingmachine/favourites",
     "config/shaders.properties",
@@ -67,7 +96,6 @@ const CLIENT_PATHS: &[&str] = &[
     "servers.dat",
     "backups",
 ];
-const SERVER_PATHS: &[&str] = &["config/JourneyMapServer"];
 
 fn defaults(paths: &[&str]) -> Vec<Rule> {
     paths
@@ -95,7 +123,14 @@ pub struct Settings {
     #[serde(default)]
     pub prism_instances_directory: Option<String>,
     pub client_rules: Vec<Rule>,
+    #[serde(default)]
     pub server_rules: Vec<Rule>,
+    #[serde(default)]
+    pub client_mods: Vec<ModRule>,
+    #[serde(default)]
+    pub server_mods: Vec<ModRule>,
+    #[serde(default)]
+    pub client_renames: Vec<RenameRule>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -108,7 +143,10 @@ impl Default for Settings {
             server_source: None,
             prism_instances_directory: None,
             client_rules: defaults(CLIENT_PATHS),
-            server_rules: defaults(SERVER_PATHS),
+            server_rules: Vec::new(),
+            client_mods: Vec::new(),
+            server_mods: Vec::new(),
+            client_renames: Vec::new(),
         }
     }
 }
@@ -143,38 +181,97 @@ impl Settings {
         if self.schema_version != 1 {
             return Err(Error::Validation("Unsupported schema version".into()));
         }
-        for (rules, required) in [
-            (&self.client_rules, CLIENT_PATHS),
-            (&self.server_rules, SERVER_PATHS),
-        ] {
-            let mut seen = std::collections::HashSet::new();
-            for rule in rules {
-                if !validate_rule_path(&rule.path) || !seen.insert(rule.path.to_lowercase()) {
-                    return Err(Error::Validation(format!(
-                        "Invalid or duplicate relative path: {}",
-                        rule.path
-                    )));
-                }
-                if !rule.custom
-                    && (!required.contains(&rule.path.as_str())
-                        || rule.conflict != Conflict::Replace)
-                {
-                    return Err(Error::Validation(
-                        "Standard rule identity or conflict policy was changed".into(),
-                    ));
-                }
+        let (rules, required) = (&self.client_rules, CLIENT_PATHS);
+        let mut seen = std::collections::HashSet::new();
+        for rule in rules {
+            if !validate_rule_path(&rule.path) || !seen.insert(rule.path.to_lowercase()) {
+                return Err(Error::Validation(format!(
+                    "Invalid or duplicate relative path: {}",
+                    rule.path
+                )));
             }
-            if required
-                .iter()
-                .any(|path| !rules.iter().any(|r| !r.custom && r.path == *path))
+            if !rule.custom
+                && (!required.contains(&rule.path.as_str()) || rule.conflict != Conflict::Replace)
             {
                 return Err(Error::Validation(
-                    "Standard rules must be retained (disable instead of removing)".into(),
+                    "Standard rule identity or conflict policy was changed".into(),
                 ));
+            }
+        }
+        if required
+            .iter()
+            .any(|path| !rules.iter().any(|r| !r.custom && r.path == *path))
+        {
+            return Err(Error::Validation(
+                "Standard rules must be retained (disable instead of removing)".into(),
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for rule in &self.server_rules {
+            if !rule.custom
+                || !validate_rule_path(&rule.path)
+                || !seen.insert(rule.path.to_lowercase())
+            {
+                return Err(Error::Validation(format!(
+                    "Invalid or duplicate server transfer path: {}",
+                    rule.path
+                )));
+            }
+        }
+        validate_mods(&self.client_mods)?;
+        validate_mods(&self.server_mods)?;
+        let mut seen = std::collections::HashSet::new();
+        for rule in &self.client_renames {
+            if !valid_rename(rule) || !seen.insert(rule.path.to_lowercase()) {
+                return Err(Error::Validation(format!(
+                    "Invalid or duplicate rename rule: {}",
+                    rule.path
+                )));
             }
         }
         Ok(())
     }
+}
+
+/// A rename keeps the file in its folder: `to` is one valid component that differs from the old name.
+pub fn valid_rename(rule: &RenameRule) -> bool {
+    let name = rule.path.rsplit('/').next().unwrap_or_default();
+    validate_rule_path(&rule.path)
+        && validate_rule_path(&rule.to)
+        && !rule.to.contains('/')
+        && rule.to.to_lowercase() != name.to_lowercase()
+}
+
+fn validate_mods(rules: &[ModRule]) -> Result<(), Error> {
+    let invalid = |message: &str| Err(Error::Validation(format!("Invalid mod rule: {message}")));
+    let mut files = std::collections::HashSet::new();
+    let mut removals = std::collections::HashSet::new();
+    for rule in rules {
+        if rule.name.is_empty()
+            || rule.name.chars().count() > 200
+            || rule.stem.is_empty()
+            || rule.mod_ids.iter().any(String::is_empty)
+        {
+            return invalid("name, stem and mod ids must not be empty");
+        }
+        match (rule.action, &rule.file) {
+            (ModAction::Add, Some(file)) if !file.is_empty() => {
+                if !files.insert(file.to_lowercase()) {
+                    return invalid("duplicate mod file");
+                }
+            }
+            (ModAction::Add, _) => return invalid("an add rule needs a file"),
+            (ModAction::Remove, None) => {
+                let mut ids = rule.mod_ids.clone();
+                ids.sort();
+                if !removals.insert((ids, rule.stem.clone())) {
+                    return invalid("duplicate removal");
+                }
+            }
+            (ModAction::Remove, Some(_)) => return invalid("a remove rule has no file"),
+        }
+    }
+    Ok(())
 }
 
 pub fn load_settings(directory: &Path) -> Result<Settings, Error> {
@@ -184,6 +281,10 @@ pub fn load_settings(directory: &Path) -> Result<Settings, Error> {
             // Compatibility only: discard the removed setting from older config files.
             if let Some(object) = json.as_object_mut() {
                 object.remove("includeNightlies");
+                // Old files stored a standard (non-custom) server rule; only custom ones remain.
+                if let Some(serde_json::Value::Array(rules)) = object.get_mut("serverRules") {
+                    rules.retain(|r| r.get("custom").and_then(|c| c.as_bool()) == Some(true));
+                }
             }
             let settings: Settings = serde_json::from_value(json)?;
             settings.validate()?;
@@ -225,7 +326,6 @@ mod tests {
                 .unwrap()
                 .enabled
         );
-        assert_eq!(s.server_rules[0].path, "config/JourneyMapServer");
     }
     #[test]
     fn older_settings_gain_optional_fields() {
@@ -239,6 +339,44 @@ mod tests {
         assert!(settings.client_source.is_none());
         assert!(settings.server_source.is_none());
         assert!(settings.prism_instances_directory.is_none());
+    }
+    #[test]
+    fn rename_rules_are_validated_and_optional_in_old_settings() {
+        let rename = |path: &str, to: &str| RenameRule {
+            path: path.into(),
+            to: to.into(),
+            enabled: true,
+        };
+        let with = |renames: Vec<RenameRule>| Settings {
+            client_renames: renames,
+            ..Settings::default()
+        };
+        with(vec![rename("config/a/ru_RU.lang", "en_US.lang")])
+            .validate()
+            .unwrap();
+        assert!(with(vec![rename("config/a/ru_RU.lang", "b/en_US.lang")])
+            .validate()
+            .is_err());
+        assert!(with(vec![rename("config/a/ru_RU.lang", "")])
+            .validate()
+            .is_err());
+        assert!(with(vec![rename("config/a/ru_RU.lang", "RU_ru.LANG")])
+            .validate()
+            .is_err());
+        assert!(with(vec![rename("../a.lang", "b.lang")])
+            .validate()
+            .is_err());
+        assert!(with(vec![
+            rename("config/a.lang", "b.lang"),
+            rename("Config/A.lang", "c.lang")
+        ])
+        .validate()
+        .is_err());
+        let mut json = serde_json::to_value(Settings::default()).unwrap();
+        json.as_object_mut().unwrap().remove("clientRenames");
+        let settings: Settings = serde_json::from_value(json).unwrap();
+        settings.validate().unwrap();
+        assert!(settings.client_renames.is_empty());
     }
     #[test]
     fn prism_directory_roundtrips_and_can_be_cleared() {
@@ -276,6 +414,93 @@ mod tests {
         assert!(saved.get("includeNightlies").is_none());
     }
     #[test]
+    fn standard_server_rule_is_dropped_and_custom_ones_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        let mut json = serde_json::to_value(Settings::default()).unwrap();
+        json["serverRules"] = serde_json::json!([{
+            "path": "config/JourneyMapServer",
+            "enabled": true,
+            "conflict": "replace",
+            "custom": false
+        }]);
+        fs::write(&file, serde_json::to_vec(&json).unwrap()).unwrap();
+        let settings = load_settings(dir.path()).unwrap();
+        assert_eq!(settings, Settings::default());
+        save_settings(dir.path(), &settings).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved["serverRules"], serde_json::json!([]));
+        json["serverRules"] = serde_json::json!([
+            {"path": "config/JourneyMapServer", "enabled": true, "conflict": "replace", "custom": false},
+            {"path": "config/serverutilities.cfg", "enabled": true, "conflict": "ask", "custom": true}
+        ]);
+        fs::write(&file, serde_json::to_vec(&json).unwrap()).unwrap();
+        let settings = load_settings(dir.path()).unwrap();
+        assert_eq!(settings.server_rules.len(), 1);
+        assert_eq!(settings.server_rules[0].path, "config/serverutilities.cfg");
+    }
+    #[test]
+    fn server_rules_must_be_valid_custom_and_unique() {
+        let rule = |path: &str, custom: bool| Rule {
+            path: path.into(),
+            enabled: true,
+            conflict: Conflict::Ask,
+            custom,
+        };
+        let with = |rules: Vec<Rule>| Settings {
+            server_rules: rules,
+            ..Settings::default()
+        };
+        with(vec![rule("config/a.cfg", true)]).validate().unwrap();
+        assert!(with(vec![rule("config/a.cfg", false)]).validate().is_err());
+        assert!(with(vec![rule("../a", true)]).validate().is_err());
+        assert!(with(vec![rule("a/b", true), rule("A/B", true)])
+            .validate()
+            .is_err());
+    }
+    #[test]
+    fn mod_rules_are_validated() {
+        let add = |file: Option<&str>| ModRule {
+            action: ModAction::Add,
+            enabled: true,
+            name: "Mod".into(),
+            mod_ids: vec!["id".into()],
+            stem: "mod".into(),
+            file: file.map(Into::into),
+        };
+        let remove = |ids: &[&str]| ModRule {
+            action: ModAction::Remove,
+            file: None,
+            mod_ids: ids.iter().map(|s| s.to_string()).collect(),
+            ..add(None)
+        };
+        let with = |mods: Vec<ModRule>| Settings {
+            client_mods: mods,
+            ..Settings::default()
+        };
+        with(vec![add(Some("/m/a.jar")), remove(&["a", "b"])])
+            .validate()
+            .unwrap();
+        assert!(with(vec![add(None)]).validate().is_err());
+        assert!(with(vec![add(Some(""))]).validate().is_err());
+        assert!(with(vec![add(Some("/m/a.jar")), add(Some("/M/A.jar"))])
+            .validate()
+            .is_err());
+        assert!(with(vec![remove(&["a", "b"]), remove(&["b", "a"])])
+            .validate()
+            .is_err());
+        let mut bad = remove(&["a"]);
+        bad.file = Some("x.jar".into());
+        assert!(with(vec![bad]).validate().is_err());
+        let mut bad = remove(&[""]);
+        assert!(with(vec![bad.clone()]).validate().is_err());
+        bad.mod_ids = vec![];
+        bad.name = "x".repeat(201);
+        assert!(with(vec![bad.clone()]).validate().is_err());
+        bad.name = String::new();
+        assert!(with(vec![bad]).validate().is_err());
+    }
+    #[test]
     fn roundtrip_and_overwrite() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(load_settings(dir.path()).unwrap(), Settings::default());
@@ -285,7 +510,7 @@ mod tests {
         s.client_source = Some("/example/instance/.minecraft".into());
         s.language = Language::En;
         s.theme = Theme::Light;
-        s.server_rules.push(Rule {
+        s.client_rules.push(Rule {
             path: "my-world".into(),
             enabled: true,
             custom: true,
@@ -293,7 +518,7 @@ mod tests {
         });
         save_settings(dir.path(), &s).unwrap();
         assert_eq!(load_settings(dir.path()).unwrap(), s);
-        assert!(!load_settings(dir.path())
+        assert!(load_settings(dir.path())
             .unwrap()
             .client_rules
             .iter()
