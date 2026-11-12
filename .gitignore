@@ -7,14 +7,7 @@
 /docs/
 
 # Dependencies and build output
-node_modules/
 /target/
-/src-tauri/target/
-/dist/
-/src-tauri/gen/
-.vite/
-coverage/
-*.tsbuildinfo
 
 # Local configuration and environment secrets
 .env

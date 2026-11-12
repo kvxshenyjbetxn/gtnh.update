@@ -78,42 +78,33 @@ Java не встановлюється, Minecraft/сервер не запуск
 
 ## Розробка й перевірки
 
-Потрібні Node.js 22, npm, актуальний стабільний Rust та [системні залежності Tauri 2](https://v2.tauri.app/start/prerequisites/) для вашої ОС.
+Інтерфейс написано на [GPUI](https://www.gpui.rs/) (Rust); Node.js, npm і WebView2 не потрібні. Потрібен Rust версії не нижче 1.95. На Windows — toolchain MSVC (`x86_64-pc-windows-msvc`) з C++ Build Tools та Windows SDK. На Linux потрібні системні пакети (Ubuntu/Debian):
 
 ```sh
-npm ci
-npm run tauri -- dev
+sudo apt-get install -y pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libfontconfig-dev libfreetype-dev
+```
+
+Запуск у режимі розробки:
+
+```sh
+cargo run -p gtnh-updater
 ```
 
 Перевірки, які також запускає `.github/workflows/check.yml` на macOS, Linux і Windows:
 
 ```sh
-npm test
-npm run check
-npm run build
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-Локальна macOS-збірка `.app` (архітектура поточного комп'ютера):
+### Релізна збірка
 
 ```sh
-npm run tauri -- build --bundles app --config '{"bundle":{"active":true,"macOS":{"signingIdentity":"-"}}}'
+cargo build --release -p gtnh-updater
 ```
 
-Результат: `target/release/bundle/macos/GTNH Updater.app`. Команда застосовує локальний ad-hoc підпис для цілісності пакета; він не замінює Developer ID або нотаризацію Apple.
-
-### Локальна Windows-збірка (x64)
-
-На Windows x64 встановіть Node.js 22, Rust для `x86_64-pc-windows-msvc`, C++ Build Tools з Windows SDK та інші [залежності Tauri](https://v2.tauri.app/start/prerequisites/#windows). У корені проєкту виконайте:
-
-```powershell
-npm ci
-npm run build:windows
-```
-
-Результат — `target\release\gtnh-updater.exe`. Це непідписаний виконуваний файл без інсталятора. Для запуску потрібен [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/); Node.js і Rust на комп'ютері користувача не потрібні. Налаштування та завантаження зберігаються в каталозі конфігурації користувача, а не біля `.exe`. Збірка сама по собі не є опублікованим релізом.
+Результат — `target/release/gtnh-updater` (`targetelease\gtnh-updater.exe` на Windows). Це непідписаний виконуваний файл без інсталятора; Rust на комп'ютері користувача не потрібен. Пакет macOS `.app` поки не створюється. Налаштування та завантаження зберігаються в каталозі конфігурації користувача, а не біля виконуваного файлу. Збірка сама по собі не є опублікованим релізом.
 
 Для Linux потрібне відповідне середовище та формат пакування. Правила підвищення й синхронізації версій описано в `AGENTS.md`.
 
