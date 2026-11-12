@@ -56,6 +56,15 @@ pub fn color(value: u32) -> Hsla {
     rgb(value).into()
 }
 
+/// Palette matching the mode last applied by `sync_component_theme`; for views that do not know the setting.
+pub fn current_palette(cx: &App) -> &'static Palette {
+    if cx.theme().mode.is_dark() {
+        &AMOLED
+    } else {
+        &LIGHT
+    }
+}
+
 /// CSS font-family is `Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`.
 pub fn ui_font() -> &'static str {
     if cfg!(target_os = "windows") {

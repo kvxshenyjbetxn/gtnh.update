@@ -8,6 +8,7 @@ mod backend;
 mod flow;
 mod i18n;
 mod logic;
+mod rules;
 mod theme;
 mod ui;
 

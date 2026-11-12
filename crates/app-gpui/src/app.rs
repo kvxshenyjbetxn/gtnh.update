@@ -12,8 +12,12 @@ use gpui_component::{
 use gtnh_core::{Language, Settings, Theme};
 
 use crate::i18n::{messages, Messages};
+use crate::rules::{
+    mods::ModRulesView, renames::renames_valid, renames::RenameRulesView,
+    transfer::TransferRulesView, RulesEvent, RulesProps,
+};
 use crate::theme::{color, mono_font, palette, sync_component_theme, ui_font, Palette};
-use crate::ui::secondary_button;
+use crate::ui::{card, directory, field, muted_paragraph, paragraph, secondary_button, status_block};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -24,6 +28,13 @@ enum Tab {
 
 type Items = SearchableVec<SharedString>;
 type LabelSelect = SelectState<Items>;
+
+/// Temporary client rule editors shown when `GTNH_GPUI_PREVIEW_RULES=1`; replaced by the wizard.
+struct RulesPreview {
+    transfer: Entity<TransferRulesView>,
+    mods: Entity<ModRulesView>,
+    renames: Entity<RenameRulesView>,
+}
 
 pub struct AppView {
     settings: Settings,
@@ -42,6 +53,7 @@ pub struct AppView {
     dir: PathBuf,
     language_select: Entity<LabelSelect>,
     theme_select: Entity<LabelSelect>,
+    preview: Option<RulesPreview>,
 }
 
 fn theme_items(m: &Messages) -> Items {
@@ -100,6 +112,9 @@ impl AppView {
 
         sync_component_theme(settings.theme, cx);
 
+        let preview = (std::env::var("GTNH_GPUI_PREVIEW_RULES").as_deref() == Ok("1"))
+            .then(|| Self::new_preview(window, cx));
+
         let mut view = Self {
             settings,
             saved: None,
@@ -117,9 +132,77 @@ impl AppView {
                 .join("app.gtnh.updater"),
             language_select,
             theme_select,
+            preview,
         };
         view.load(window, cx);
         view
+    }
+
+    fn new_preview(window: &mut Window, cx: &mut Context<Self>) -> RulesPreview {
+        let transfer = cx.new(|cx| TransferRulesView::new(false, window, cx));
+        let mods = cx.new(|cx| ModRulesView::new(window, cx));
+        let renames = cx.new(|cx| RenameRulesView::new(window, cx));
+        cx.subscribe(&transfer, |this, editor, event: &RulesEvent, cx| match event {
+            RulesEvent::Changed => {
+                this.settings.client_rules = editor.read(cx).rules().to_vec();
+                this.changed(cx);
+            }
+            RulesEvent::Picking(picking) => this.set_picking(*picking, cx),
+        })
+        .detach();
+        cx.subscribe(&mods, |this, editor, event: &RulesEvent, cx| match event {
+            RulesEvent::Changed => {
+                this.settings.client_mods = editor.read(cx).rules().to_vec();
+                this.changed(cx);
+            }
+            RulesEvent::Picking(picking) => this.set_picking(*picking, cx),
+        })
+        .detach();
+        cx.subscribe(&renames, |this, editor, event: &RulesEvent, cx| match event {
+            RulesEvent::Changed => {
+                this.settings.client_renames = editor.read(cx).rules().to_vec();
+                this.changed(cx);
+            }
+            RulesEvent::Picking(picking) => this.set_picking(*picking, cx),
+        })
+        .detach();
+        RulesPreview { transfer, mods, renames }
+    }
+
+    fn set_picking(&mut self, picking: bool, cx: &mut Context<Self>) {
+        self.picking = picking;
+        cx.notify();
+    }
+
+    /// Pushes the loaded rules into the preview editors.
+    fn sync_preview_rules(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(preview) = &self.preview else { return };
+        let (rules, mods, renames) = (
+            self.settings.client_rules.clone(),
+            self.settings.client_mods.clone(),
+            self.settings.client_renames.clone(),
+        );
+        preview.transfer.update(cx, |view, cx| view.set_rules(rules, window, cx));
+        preview.mods.update(cx, |view, cx| view.set_rules(mods, window, cx));
+        preview.renames.update(cx, |view, cx| view.set_rules(renames, window, cx));
+    }
+
+    /// Pushes source / language / disabled into the preview editors (cheap; they notify only on change).
+    fn sync_preview_props(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(preview) = &self.preview else { return };
+        let source = self.settings.client_source.clone().unwrap_or_default();
+        let mods_directory = if source.is_empty() {
+            String::new()
+        } else {
+            Path::new(&source).join("mods").to_string_lossy().into_owned()
+        };
+        let language = self.settings.language;
+        let disabled = !self.loaded || self.picking;
+        let props = RulesProps { source, language, disabled };
+        let mods_props = RulesProps { source: mods_directory, ..props.clone() };
+        preview.transfer.update(cx, |view, cx| view.set_props(&props, window, cx));
+        preview.mods.update(cx, |view, cx| view.set_props(&mods_props, window, cx));
+        preview.renames.update(cx, |view, cx| view.set_props(&props, window, cx));
     }
 
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -145,6 +228,7 @@ impl AppView {
                         this.loaded = true;
                         sync_component_theme(this.settings.theme, cx);
                         this.sync_selects(window, cx);
+                        this.sync_preview_rules(window, cx);
                     }
                     Err(error) => this.error = Some(error),
                 }
@@ -204,7 +288,8 @@ impl AppView {
     }
 
     fn maybe_save(&mut self, cx: &mut Context<Self>) {
-        if !self.loaded || self.saving {
+        // Rows with an invalid new name are shown inline; they are saved once corrected.
+        if !self.loaded || self.saving || !renames_valid(&self.settings.client_renames) {
             return;
         }
         let Ok(snapshot) = serde_json::to_value(&self.settings) else {
@@ -315,81 +400,11 @@ impl AppView {
     }
 }
 
-// --- view helpers ---------------------------------------------------------------------------
-
-/// `.notice` / `.error` rule from style.css.
-fn status_block(p: &Palette, text_color: u32) -> Div {
-    div()
-        .border_1()
-        .border_color(color(p.border))
-        .rounded(px(10.))
-        .px(px(18.))
-        .py(px(15.))
-        .mb(px(20.))
-        .text_size(px(12.))
-        .line_height(relative(1.6))
-        .text_color(color(text_color))
-}
-
-/// Paragraph with `line-height: 1.65`.
-fn paragraph(text: impl Into<SharedString>) -> Div {
-    div().line_height(relative(1.65)).child(text.into())
-}
-
-fn muted_paragraph(p: &Palette, text: &'static str) -> Div {
-    paragraph(text)
-        .text_size(px(12.))
-        .text_color(color(p.muted))
-        .mb(px(12.))
-}
-
-fn card(p: &Palette, narrow: bool, title: &'static str) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .bg(color(p.panel))
-        .border_1()
-        .border_color(color(p.border))
-        .rounded(px(12.))
-        .p(px(if narrow { 18. } else { 22. }))
-        .mb(px(20.))
-        .child(
-            div()
-                .text_size(px(16.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .line_height(relative(1.2))
-                .mb(px(14.))
-                .child(title),
-        )
-}
-
-/// `code.directory` rule: raised block, monospace 12px, wraps anywhere.
-fn directory(p: &Palette, text: String) -> Div {
-    div()
-        .bg(color(p.raised))
-        .p(px(12.))
-        .rounded(px(7.))
-        .my(px(16.))
-        .text_size(px(12.))
-        .font_family(mono_font())
-        .child(text)
-}
-
-fn field(label: &'static str) -> Div {
-    div()
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap(px(10.))
-        .text_size(px(12.))
-        .child(label)
-}
-
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(self.settings.theme);
         let m = messages(self.settings.language);
+        self.sync_preview_props(window, cx);
         let width = window.viewport_size().width;
         let narrow = width < px(900.);
         let very_narrow = width < px(740.);
@@ -586,6 +601,11 @@ impl AppView {
 
         if settings_tab {
             content = content.child(self.render_settings(p, m, narrow, cx));
+        } else if let (Tab::Client, Some(preview)) = (self.tab, &self.preview) {
+            content = content
+                .child(preview.transfer.clone())
+                .child(div().mt(px(24.)).child(preview.mods.clone()))
+                .child(div().mt(px(24.)).child(preview.renames.clone()));
         } else {
             content = content.child(status_block(p, p.muted).child(m.prototype_pending));
         }
