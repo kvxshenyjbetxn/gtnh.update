@@ -381,9 +381,11 @@ impl Render for CatalogView {
 
             let mut actions = div()
                 .flex()
-                .flex_wrap()
                 .items_center()
                 .gap(px(8.))
+                // Wrapping only where the CSS caps the width (taffy mis-sizes wrapped rows).
+                .when(width < px(740.), |d| d.flex_wrap())
+                .when(width >= px(740.), |d| d.flex_none())
                 .when(!column, |d| d.justify_end())
                 .when(width < px(740.) && !column, |d| d.max_w(px(180.)));
             if let Some(artifact) = artifact {
