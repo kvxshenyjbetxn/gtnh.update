@@ -16,13 +16,10 @@
 //! Filesystem helpers (async; run on the tokio runtime, awaitable from `cx.spawn`):
 //! - `source_directory(path, client) -> Result<String, String>`
 //! - `instances_directory(path) -> Result<String, String>`
-//! - `relative_selections(root, paths) -> Result<Vec<String>, String>`
-//! - `inspect_mod(path) -> Result<ModInfo, String>`
 //! - `list_releases() -> Result<Vec<Release>, String>` (network)
 //!
 //! Downloads (see `downloads.rs`):
 //! - `start_download(url)`, `cancel_download(id)`, `delete_download(url)` (synchronous, return at once)
-//! - `download_status() -> Result<Vec<DownloadStatus>, String>`
 //! - `adopt_downloads(urls) -> impl Future<Result<Vec<DownloadStatus>, String>>` (async, network)
 //! - `watch_downloads() -> Result<(UnboundedReceiver<DownloadStatus>, Vec<DownloadStatus>), String>`
 //!   subscribes first, then snapshots
@@ -55,7 +52,6 @@
 //!
 //! `runtime.rs` owns a lazily created multi-thread tokio runtime. Async methods spawn onto it
 //! immediately and return a future that is safe to await on GPUI's executor.
-#![allow(dead_code)] // the download / catalog half of the backend is consumed by the release catalog view
 
 pub mod downloads;
 pub mod installation;
@@ -159,22 +155,6 @@ impl Backend {
         runtime::run_blocking(move || {
             gtnh_core::selection::instances_directory(Path::new(&path)).map_err(|e| e.to_string())
         })
-    }
-    pub fn relative_selections(
-        &self,
-        root: String,
-        paths: Vec<String>,
-    ) -> impl Future<Output = Result<Vec<String>, String>> {
-        runtime::run_blocking(move || {
-            gtnh_core::selection::relative_selections(Path::new(&root), &paths)
-                .map_err(|e| e.to_string())
-        })
-    }
-    pub fn inspect_mod(
-        &self,
-        path: String,
-    ) -> impl Future<Output = Result<gtnh_core::mods::ModInfo, String>> {
-        runtime::run_blocking(move || gtnh_core::mods::inspect(Path::new(&path)))
     }
     pub fn list_releases(
         &self,

@@ -557,10 +557,6 @@ impl Backend {
             result
         })
     }
-    /// Current status of every known download.
-    pub fn download_status(&self) -> Result<Vec<DownloadStatus>, String> {
-        self.downloads.status()
-    }
     /// Subscribes to download events and then returns the current snapshot (subscribe before
     /// query, as the Svelte UI did). Feed both into a `logic::DownloadTracker`.
     pub fn watch_downloads(

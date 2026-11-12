@@ -181,12 +181,10 @@ pub fn format_bytes(value: u64, language: Language) -> String {
 /// URL, a `deleted` status stays as a tombstone so stale events cannot bring the job back, and the
 /// visible list excludes tombstones. Subscribe first (`Backend::watch_downloads`), then `accept`
 /// the snapshot and every event.
-#[allow(dead_code)] // used by the release catalog view
 #[derive(Debug, Default)]
 pub struct DownloadTracker {
     latest: Vec<DownloadStatus>,
 }
-#[allow(dead_code)] // used by the release catalog view
 impl DownloadTracker {
     pub fn new() -> Self {
         Self::default()
@@ -220,7 +218,6 @@ impl DownloadTracker {
     }
 }
 
-#[allow(dead_code)] // used by the release catalog view
 /// Downloads of the artifacts of one mode, matched by file URL (not by selected variant).
 pub fn downloads_for_artifacts<'a>(
     statuses: &'a [DownloadStatus],
