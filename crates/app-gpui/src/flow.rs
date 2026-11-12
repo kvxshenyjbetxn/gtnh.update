@@ -5,6 +5,23 @@ use crate::backend::{InstallRequest, ServerUpdateRequest};
 use gtnh_core::{ModRule, RenameRule, Rule};
 use std::path::PathBuf;
 
+/// Which build the wizard updates (the TS `Mode = 'client' | 'server'`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Mode {
+    Client,
+    Server,
+}
+
+impl Mode {
+    /// Matches `gtnh_core::releases::Artifact::mode`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Mode::Client => "client",
+            Mode::Server => "server",
+        }
+    }
+}
+
 /// Wizard section. `index()` is the TS step number (0..=3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UpdateStep {
