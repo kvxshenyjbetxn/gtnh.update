@@ -1,5 +1,4 @@
 //! Wizard logic of the update flow, a port of `src/update-flow.ts`. Pure state transitions, no UI.
-#![allow(dead_code)] // used by the views in the next step
 
 use crate::backend::{InstallRequest, ServerUpdateRequest};
 use gtnh_core::{ModRule, RenameRule, Rule};

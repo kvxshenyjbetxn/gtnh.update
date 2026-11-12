@@ -5,12 +5,15 @@
 
 mod app;
 mod backend;
+mod catalog;
 mod flow;
 mod i18n;
+mod installation_view;
 mod logic;
 mod rules;
 mod theme;
 mod ui;
+mod update_section;
 
 use gpui::{
     px, size, AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions,
@@ -22,6 +25,7 @@ fn main() {
     // gpui-component draws its icons (checkbox tick, select chevron) from this asset source.
     application().with_assets(gpui_kit_assets::Assets).run(|cx| {
         gpui_component::init(cx);
+        backend::Backend::init(cx);
 
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {

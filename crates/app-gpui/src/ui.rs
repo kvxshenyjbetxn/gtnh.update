@@ -50,7 +50,6 @@ pub fn secondary_button(
     button(id, label, p, true, false, disabled)
 }
 
-#[allow(dead_code)]
 pub fn primary_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -129,4 +128,31 @@ pub fn field(label: &'static str) -> Div {
         .gap(px(10.))
         .text_size(px(12.))
         .child(label)
+}
+
+/// `progress` element: a track with an accent fill. `total == 0` is indeterminate (a fixed
+/// partial fill, since the native element's animation has no equivalent here).
+pub fn progress_bar(p: &Palette, done: usize, total: usize) -> Div {
+    let fraction = if total == 0 {
+        0.3
+    } else {
+        (done as f32 / total as f32).clamp(0., 1.)
+    };
+    div()
+        .w_full()
+        .h(px(12.))
+        .rounded(px(6.))
+        .bg(color(p.raised))
+        .overflow_hidden()
+        .child(div().h_full().w(relative(fraction)).bg(color(p.accent)))
+}
+
+/// `pre`: wrapped monospace 12px text.
+pub fn pre(text: impl Into<SharedString>) -> Div {
+    div().font_family(mono_font()).text_size(px(12.)).child(text.into())
+}
+
+/// A left-aligned (not stretched) child of a column.
+pub fn aligned(el: impl IntoElement) -> Div {
+    div().flex().flex_row().child(el)
 }

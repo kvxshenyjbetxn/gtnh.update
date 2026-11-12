@@ -55,7 +55,7 @@
 //!
 //! `runtime.rs` owns a lazily created multi-thread tokio runtime. Async methods spawn onto it
 //! immediately and return a future that is safe to await on GPUI's executor.
-#![allow(dead_code)] // used by the views in the next step
+#![allow(dead_code)] // the download / catalog half of the backend is consumed by the release catalog view
 
 pub mod downloads;
 pub mod installation;
