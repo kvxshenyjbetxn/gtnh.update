@@ -19,4 +19,10 @@ gtnh-core = { path = "../.." }
 rfd = "=0.16.1"
 open = "=5.4.5"
 dirs = "7"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+futures = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+tempfile = "3"
