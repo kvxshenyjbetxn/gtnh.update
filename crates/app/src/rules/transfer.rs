@@ -321,18 +321,22 @@ impl Render for TransferRulesView {
                 }
                 if rule.custom {
                     if let Some(Some(select)) = self.selects.get(index) {
+                        // Select's root is `size_full`, so a fixed, non-shrinking wrapper
+                        // keeps it from eating the path column.
                         row = row.child(
-                            Select::new(select)
-                                .disabled(disabled)
-                                .bg(color(p.raised))
-                                .border_color(color(p.border))
-                                .text_color(color(p.text))
-                                .rounded(px(8.))
-                                .w(px(130.))
-                                .h(px(28.))
-                                .px(px(6.))
-                                .py(px(6.))
-                                .text_size(px(11.)),
+                            div().flex_shrink_0().w(px(130.)).child(
+                                Select::new(select)
+                                    .disabled(disabled)
+                                    .bg(color(p.raised))
+                                    .border_color(color(p.border))
+                                    .text_color(color(p.text))
+                                    .rounded(px(8.))
+                                    .w(px(130.))
+                                    .h(px(28.))
+                                    .px(px(6.))
+                                    .py(px(6.))
+                                    .text_size(px(11.)),
+                            ),
                         );
                     }
                     row = row.child(remove_button(("rule-remove", index), p, disabled).when(

@@ -645,16 +645,18 @@ impl InstallationView {
         let row = rule_row(p, narrow).child(path);
         if !file.directory && file.exists && file.conflict == Conflict::Ask {
             let select = self.decision_select(scope, &file.path, window, cx);
+            // Select's root is `size_full`; the fixed wrapper keeps the path column wide.
             row.child(
-                Select::new(&select)
-                    .w(px(130.))
-                    .flex_shrink_0()
-                    .bg(color(p.raised))
-                    .border_color(color(p.border))
-                    .text_color(color(p.text))
-                    .rounded(px(8.))
-                    .px(px(6.))
-                    .text_size(px(11.)),
+                div().flex_shrink_0().w(px(130.)).child(
+                    Select::new(&select)
+                        .w(px(130.))
+                        .bg(color(p.raised))
+                        .border_color(color(p.border))
+                        .text_color(color(p.text))
+                        .rounded(px(8.))
+                        .px(px(6.))
+                        .text_size(px(11.)),
+                ),
             )
         } else {
             row.child(self.policy_label(p, policy(m, file).to_string()))
