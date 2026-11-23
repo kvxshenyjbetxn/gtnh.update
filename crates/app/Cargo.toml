@@ -1,6 +1,6 @@
 [package]
 name = "gtnh-updater"
-version = "0.9.1"
+version = "0.9.3"
 edition = "2021"
 # gpui-pre 0.3.12 uses std::hint::cold_path (stable since 1.95).
 rust-version = "1.95"

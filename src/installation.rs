@@ -5,7 +5,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -157,6 +157,10 @@ pub(crate) fn extract(
     reject_coalesced_entries(archive, zip.central_directory_start(), zip.len())?;
     let mut names = HashMap::new();
     let mut size = 0u64;
+    // Files seen so far by lowercase path -> (size, CRC32), and the later entries that
+    // are identical case-variants of an earlier file (skipped on every OS).
+    let mut seen_files: HashMap<String, (u64, u32)> = HashMap::new();
+    let mut skipped = HashSet::new();
     // Validate the complete directory before writing anything.
     for index in 0..zip.len() {
         let file = zip.by_index(index).map_err(error)?;
@@ -172,6 +176,20 @@ pub(crate) fn extract(
                 ));
             }
         }
+        if !file.is_dir() {
+            let key = name.to_lowercase();
+            let identity = (file.size(), file.crc32());
+            match seen_files.get(&key) {
+                Some(first) if *first == identity => {
+                    skipped.insert(index);
+                    continue;
+                }
+                Some(_) => {}
+                None => {
+                    seen_files.insert(key, identity);
+                }
+            }
+        }
         register(&mut names, name, file.is_dir())?;
         size = size.checked_add(file.size()).ok_or("Archive too large")?;
         if size > 32 * 1024 * 1024 * 1024 {
@@ -184,7 +202,9 @@ pub(crate) fn extract(
     for index in 0..zip.len() {
         let mut file = zip.by_index(index).map_err(error)?;
         let path = into.join(file.name());
-        if file.is_dir() {
+        if skipped.contains(&index) {
+            // Redundant case-variant of an earlier identical file.
+        } else if file.is_dir() {
             fs::create_dir_all(&path).map_err(error)?;
         } else {
             fs::create_dir_all(path.parent().ok_or("Invalid archive path")?).map_err(error)?;

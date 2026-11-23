@@ -685,6 +685,50 @@ fn file_case_aliases_and_file_directory_collisions_are_rejected() {
     }
 }
 
+#[test]
+fn identical_case_duplicate_files_are_extracted_once_from_the_first_entry() {
+    let (_dir, source, zip, target) = setup();
+    archive(
+        &zip,
+        &[
+            ("mods/a.jar", "jar"),
+            ("config/lang/ru_Ru.lang", "same"),
+            ("config/lang/ru_RU.lang", "same"),
+        ],
+    );
+    prepare(&zip, &source, &target, false, &[], &[], &[], |_| {})
+        .unwrap()
+        .finish(&[], |_| {})
+        .unwrap();
+    let names: Vec<_> = fs::read_dir(target.join("config/lang"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(names, ["ru_Ru.lang"]);
+    assert_eq!(
+        fs::read_to_string(target.join("config/lang/ru_Ru.lang")).unwrap(),
+        "same"
+    );
+}
+
+#[test]
+fn case_duplicate_files_with_different_content_are_rejected_naming_the_path() {
+    let (_dir, source, zip, target) = setup();
+    archive(
+        &zip,
+        &[
+            ("mods/a.jar", "jar"),
+            ("config/lang/ru_Ru.lang", "one"),
+            ("config/lang/ru_RU.lang", "two"),
+        ],
+    );
+    let error = prepare(&zip, &source, &target, false, &[], &[], &[], |_| {})
+        .err()
+        .unwrap();
+    assert!(error.contains("config/lang/ru_RU.lang"), "{error}");
+    assert!(!target.exists());
+}
+
 // On Windows/macOS both spellings merge into one folder, on Linux they stay separate.
 fn read_either(root: &Path, spellings: [&str; 2], rest: &str) -> String {
     spellings

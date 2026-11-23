@@ -2559,7 +2559,7 @@ dependencies = [
 
 [[package]]
 name = "gtnh-core"
-version = "0.9.1"
+version = "0.9.3"
 dependencies = [
  "fs2",
  "reqwest",
@@ -2577,7 +2577,7 @@ dependencies = [
 
 [[package]]
 name = "gtnh-updater"
-version = "0.9.1"
+version = "0.9.3"
 dependencies = [
  "dirs 7.0.0",
  "futures",
